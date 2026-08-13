@@ -1,0 +1,40 @@
+"""Model invariants that a persisted snapshot depends on."""
+
+from datetime import date
+from typing import Final
+
+import pytest
+from pydantic import ValidationError
+
+from orient.domain.models import CrossAsset, Returns, Signals, TrendDistance
+
+
+def test_the_curve_spread_is_derived_from_the_two_yields() -> None:
+    assert CrossAsset(yield_10y=4.25, yield_2y=3.75).spread_10s2s == pytest.approx(0.5)
+
+
+@pytest.mark.parametrize("cross", [CrossAsset(yield_10y=4.25), CrossAsset(yield_2y=3.75), CrossAsset()])
+def test_the_curve_spread_is_none_unless_both_yields_are_present(cross: CrossAsset) -> None:
+    assert cross.spread_10s2s is None
+
+
+def test_the_curve_spread_survives_serialisation() -> None:
+    """Signals are stored as jsonb and re-read months later, so a derived field must be written out."""
+    assert CrossAsset(yield_10y=4.25, yield_2y=3.75).model_dump()["spread_10s2s"] == pytest.approx(0.5)
+
+
+def test_a_signals_snapshot_cannot_be_mutated_after_the_fact() -> None:
+    signals: Final = Signals(
+        symbol="^GSPC",
+        session_date=date(2026, 8, 12),
+        close=100.0,
+        returns=Returns(),
+        trend=TrendDistance(),
+    )
+    with pytest.raises(ValidationError):
+        signals.close = 200.0  # pyright: ignore[reportAttributeAccessIssue]  # the point of the test
+
+
+def test_an_unknown_field_is_rejected_rather_than_silently_kept() -> None:
+    with pytest.raises(ValidationError):
+        _ = TrendDistance(from_20_day=0.1)  # pyright: ignore[reportCallIssue]  # the point of the test

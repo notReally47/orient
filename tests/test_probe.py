@@ -6,13 +6,14 @@ offline while still exercising the same request and parsing path as production.
 
 import json
 from collections.abc import Callable
-from datetime import date
+from datetime import date, timedelta
 from typing import Final
 
 import httpx
 import pytest
 
 from orient.config import Settings
+from orient.domain.models import Bar, Observation
 from orient.probe import (
     EXPECTED_TABLES,
     Deps,
@@ -36,6 +37,7 @@ from orient.probe import (
     format_report,
     run,
 )
+from orient.providers.protocols import PriceProvider, SeriesProvider
 
 Handler = Callable[[httpx.Request], httpx.Response]
 
@@ -48,41 +50,57 @@ def _settings() -> Settings:
     )
 
 
-class _Frame:
-    """Stands in for a pandas object: the probe only ever asks for `.index`."""
-
-    def __init__(self, rows: int) -> None:
-        self.index: Final = tuple(range(rows))
-
-
-class _Market:
-    def __init__(self, history_rows: int = 5, series_rows: int = 20) -> None:
-        self._history: Final = _Frame(history_rows)
-        self._series: Final = _Frame(series_rows)
-
-    def history(self, symbol: str, period: str) -> object:
-        del symbol, period
-        return self._history
-
-    def series(self, series_id: str, start: date, end: date) -> object:
-        del series_id, start, end
-        return self._series
-
-
+_FIRST_SESSION: Final = date(2026, 1, 5)
 _UNREACHABLE: Final = "provider unreachable"
 
 
-class _Exploding:
-    def history(self, symbol: str, period: str) -> object:
+class _Prices:
+    def __init__(self, count: int = 5) -> None:
+        self._bars: Final = tuple(
+            Bar(
+                session_date=_FIRST_SESSION + timedelta(days=offset),
+                open=1.0,
+                high=1.0,
+                low=1.0,
+                close=1.0,
+                volume=1,
+            )
+            for offset in range(count)
+        )
+
+    def daily_bars(self, symbol: str, period: str) -> tuple[Bar, ...]:
+        del symbol, period
+        return self._bars
+
+
+class _Series:
+    def __init__(self, count: int = 20) -> None:
+        self._observations: Final = tuple(
+            Observation(observation_date=_FIRST_SESSION + timedelta(days=offset), value=4.0) for offset in range(count)
+        )
+
+    def observations(self, series_id: str, start: date, end: date) -> tuple[Observation, ...]:
+        del series_id, start, end
+        return self._observations
+
+
+class _ExplodingPrices:
+    def daily_bars(self, symbol: str, period: str) -> tuple[Bar, ...]:
         del symbol, period
         raise ConnectionError(_UNREACHABLE)
 
-    def series(self, series_id: str, start: date, end: date) -> object:
+
+class _ExplodingSeries:
+    def observations(self, series_id: str, start: date, end: date) -> tuple[Observation, ...]:
         del series_id, start, end
         raise ConnectionError(_UNREACHABLE)
 
 
-def _deps(handler: Handler, market: object | None = None) -> Deps:
+def _deps(
+    handler: Handler,
+    prices: PriceProvider | None = None,
+    series: SeriesProvider | None = None,
+) -> Deps:
     client: Final = httpx.Client(transport=httpx.MockTransport(handler), base_url="http://proxy")
     return Deps(
         settings=_settings(),
@@ -90,7 +108,8 @@ def _deps(handler: Handler, market: object | None = None) -> Deps:
         proxy=client,
         headroom=client,
         jaeger=client,
-        market=market or _Market(),  # pyright: ignore[reportArgumentType]  # structural stand-in
+        prices=prices or _Prices(),
+        series=series or _Series(),
     )
 
 
@@ -176,23 +195,24 @@ def test_jaeger_passes_once_the_proxy_reports_in() -> None:
     assert isinstance(result, Passed)
 
 
-def test_market_checks_pass_with_rows() -> None:
-    deps: Final = _deps(_json_handler({}), market=_Market(history_rows=5, series_rows=20))
+def test_market_checks_pass_with_data() -> None:
+    deps: Final = _deps(_json_handler({}))
     assert isinstance(check_yahoo(deps), Passed)
     assert isinstance(check_fred(deps), Passed)
 
 
-def test_market_checks_fail_on_empty_frames() -> None:
-    deps: Final = _deps(_json_handler({}), market=_Market(history_rows=0, series_rows=0))
+def test_market_checks_fail_when_a_provider_returns_nothing() -> None:
+    """Reachable but empty is a failure: every later step reads these as its only ground truth."""
+    deps: Final = _deps(_json_handler({}), prices=_Prices(0), series=_Series(0))
     assert isinstance(check_yahoo(deps), Failed)
     assert isinstance(check_fred(deps), Failed)
 
 
 def test_market_checks_report_the_exception_rather_than_raising() -> None:
-    deps: Final = _deps(_json_handler({}), market=_Exploding())
-    result: Final = check_yahoo(deps)
-    assert isinstance(result, Failed)
-    assert "ConnectionError" in result.detail
+    deps: Final = _deps(_json_handler({}), prices=_ExplodingPrices(), series=_ExplodingSeries())
+    for result in (check_yahoo(deps), check_fred(deps)):
+        assert isinstance(result, Failed)
+        assert "ConnectionError" in result.detail
 
 
 def test_proxy_health_distinguishes_alive_from_a_bad_status() -> None:

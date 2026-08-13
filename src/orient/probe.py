@@ -11,15 +11,17 @@ import sys
 from collections.abc import Callable, Sized
 from contextlib import ExitStack
 from dataclasses import dataclass
-from datetime import UTC, date, datetime, timedelta
-from typing import Final, Literal, Protocol
+from datetime import UTC, datetime, timedelta
+from typing import Final, Literal
 
 import httpx
 import psycopg
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
 from orient.config import ProxyEnv, Settings
-from orient.providers._untyped import fred_series, yahoo_history
+from orient.providers.fred import FredProvider
+from orient.providers.protocols import PriceProvider, SeriesProvider
+from orient.providers.yahoo import YahooProvider
 
 TIMEOUT: Final = httpx.Timeout(30.0)
 REQUIRED_GUARDRAILS: Final = frozenset({"headroom-compression", "quality-judge"})
@@ -49,19 +51,6 @@ class Warned:
 CheckResult = Passed | Failed | Warned
 
 
-class MarketData(Protocol):
-    def history(self, symbol: str, period: str) -> object: ...
-    def series(self, series_id: str, start: date, end: date) -> object: ...
-
-
-class YahooFred:
-    def history(self, symbol: str, period: str) -> object:
-        return yahoo_history(symbol, period)
-
-    def series(self, series_id: str, start: date, end: date) -> object:
-        return fred_series(series_id, start, end)
-
-
 @dataclass(frozen=True, slots=True)
 class Deps:
     settings: Settings
@@ -69,7 +58,8 @@ class Deps:
     proxy: httpx.Client
     headroom: httpx.Client
     jaeger: httpx.Client
-    market: MarketData
+    prices: PriceProvider
+    series: SeriesProvider
 
 
 Check = Callable[[Deps], CheckResult]
@@ -122,12 +112,6 @@ def _describe(exc: Exception) -> str:
     """One line per check, so a multi-line driver error cannot break the report's alignment."""
     detail: Final = " ".join(str(exc).split())
     return f"{type(exc).__name__}: {detail[:180]}"
-
-
-def _row_count(frame: object) -> int:
-    """yfinance and pandas-datareader are untyped, so narrow their result here rather than leaking Unknown."""
-    index: Final = getattr(frame, "index", None)
-    return len(index) if isinstance(index, Sized) else 0
 
 
 def _sequence_len(value: object) -> int:
@@ -275,7 +259,7 @@ def check_embeddings(deps: Deps) -> CheckResult:
             "/v1/embeddings",
             json={
                 "model": deps.settings.embedding_model,
-                "input": "market summary connectivity probe",
+                "input": "orient connectivity probe",
                 "dimensions": expected,
             },
         )
@@ -354,28 +338,26 @@ def check_jaeger(deps: Deps) -> CheckResult:
 def check_yahoo(deps: Deps) -> CheckResult:
     name: Final = "yahoo finance (yfinance)"
     try:
-        history = deps.market.history("^GSPC", "5d")
-    except Exception as exc:  # noqa: BLE001  # probe
+        bars = deps.prices.daily_bars("^GSPC", "5d")
+    except Exception as exc:  # noqa: BLE001  # a probe reports every failure rather than propagating one
         return Failed(name, _describe(exc))
 
-    rows: Final = _row_count(history)
-    if rows == 0:
-        return Failed(name, "reachable but returned no rows for ^GSPC")
-    return Passed(name, f"{rows} daily bars for ^GSPC")
+    if not bars:
+        return Failed(name, "reachable but returned no bars for ^GSPC")
+    return Passed(name, f"{len(bars)} daily bars for ^GSPC")
 
 
 def check_fred(deps: Deps) -> CheckResult:
     name: Final = "FRED (pandas-datareader)"
     end: Final = datetime.now(tz=UTC).date()
     try:
-        frame = deps.market.series("DGS10", end - timedelta(days=30), end)
-    except Exception as exc:  # noqa: BLE001  # probe
+        observations = deps.series.observations("DGS10", end - timedelta(days=30), end)
+    except Exception as exc:  # noqa: BLE001  # a probe reports every failure rather than propagating one
         return Failed(name, _describe(exc))
 
-    rows: Final = _row_count(frame)
-    if rows == 0:
-        return Failed(name, "reachable but returned no rows for DGS10")
-    return Passed(name, f"{rows} observations for DGS10")
+    if not observations:
+        return Failed(name, "reachable but returned no observations for DGS10")
+    return Passed(name, f"{len(observations)} observations for DGS10")
 
 
 CHECKS: Final[tuple[Check, ...]] = (
@@ -440,7 +422,8 @@ def main() -> int:
             proxy=stack.enter_context(httpx.Client(base_url=settings.proxy_base_url, headers=auth, timeout=TIMEOUT)),
             headroom=stack.enter_context(httpx.Client(base_url=settings.headroom_api_base, timeout=TIMEOUT)),
             jaeger=stack.enter_context(httpx.Client(base_url=settings.jaeger_ui_url, timeout=TIMEOUT)),
-            market=YahooFred(),
+            prices=YahooProvider(),
+            series=FredProvider(),
         )
         results = run(deps)
 

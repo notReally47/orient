@@ -15,7 +15,7 @@ class Settings(BaseSettings):
 
     model_config = SettingsConfigDict(env_prefix="MS_", env_file=".env", extra="ignore")
 
-    database_url: str = Field(description="postgresql:// DSN for the market-summary store")
+    database_url: str = Field(description="postgresql:// DSN for the orient store")
 
     proxy_base_url: str = Field(default="http://localhost:4000")
     proxy_api_key: str = Field(description="LiteLLM virtual key or master key")
