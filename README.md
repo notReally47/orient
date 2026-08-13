@@ -29,7 +29,7 @@ Exa API key, both of which have free tiers
 ```bash
 cp .env.example .env      # then fill in GEMINI_API_KEY, EXA_API_KEY and the two LiteLLM keys
 make bootstrap            # create the venv, install the project
-make up                   # start postgres, litellm, headroom and jaeger
+make up                   # start postgres, litellm, headroom and jaeger, then apply the schema
 make probe                # verify every dependency before going further
 ```
 
@@ -45,24 +45,29 @@ built on top of a dependency that has not answered
 
 ## Layout
 
-| Path | What lives there |
-|---|---|
-| `proxy/config.yaml` | model roles, guardrails, search tools |
-| `db/migrations/` | plain SQL, applied in order on first start |
-| `src/orient/domain/` | frozen models and the signal math |
-| `src/orient/providers/` | yfinance and FRED behind Protocols |
-| `src/orient/mcp/` | the MCP tool server |
-| `src/orient/skills/` | `SKILL.md` tree, progressively loaded |
-| `src/orient/orchestrator/` | agent loop, phases, event stream |
-| `src/orient/store/` | Postgres repositories |
-| `src/orient/gui/` | Streamlit app |
+| Path                       | What lives there                                               |
+|----------------------------|----------------------------------------------------------------|
+| `proxy/config.yaml`        | model roles, guardrails, search tools                          |
+| `db/bootstrap/`            | runs once on an empty volume; creates the proxy's own database |
+| `db/migrations/`           | application schema, applied in order by `make migrate`         |
+| `src/orient/domain/`       | frozen models and the signal math                              |
+| `src/orient/providers/`    | yfinance and FRED behind Protocols                             |
+| `src/orient/mcp/`          | the MCP tool server                                            |
+| `src/orient/skills/`       | `SKILL.md` tree, progressively loaded                          |
+| `src/orient/orchestrator/` | agent loop, phases, event stream                               |
+| `src/orient/store/`        | Postgres repositories                                          |
+| `src/orient/gui/`          | Streamlit app                                                  |
 
 ## Development
 
 `make check` runs exactly what CI runs: ruff in read-only mode, a format check,
-basedpyright in strict mode, and the test suite with an 85% coverage floor. Tests run
-with sockets disabled, so a unit test that reaches the network fails loudly rather
-than passing slowly
+basedpyright in strict mode, and the offline test suite with an 85% coverage floor.
+Those tests may only connect to loopback, so one that reaches a real service fails
+loudly rather than passing slowly
+
+`make test-integration` is the other half, and it needs `make up` first. It exercises
+the SQL against the live Postgres: statement validity, projections matching the tables,
+jsonb round trips and an HNSW similarity search. It cleans up the rows it creates
 
 ## Licence
 

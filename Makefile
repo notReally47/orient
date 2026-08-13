@@ -5,7 +5,7 @@ COMPOSE ?= podman compose
 PKG     := orient
 RUN     := uv run --package $(PKG)
 
-.PHONY: help bootstrap up down reset logs migrate probe test lint format typecheck check clean
+.PHONY: help bootstrap up down reset logs migrate probe test test-integration lint format typecheck check clean
 
 help:
 	@grep -E '^[a-z-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-12s %s\n", $$1, $$2}'
@@ -38,8 +38,11 @@ migrate: ## Start the stack if needed, then apply db/migrations/*.sql in order. 
 probe: ## Verify every external dependency. Nothing is built on top until this is green.
 	$(RUN) python -m orient.probe
 
-test: ## Run the test suite
+test: ## Run the offline test suite
 	$(RUN) pytest
+
+test-integration: ## Run the store tests against the live Postgres from `make up`
+	$(RUN) pytest -m integration --no-cov
 
 lint: ## Read-only lint and format check, identical to CI
 	$(RUN) ruff check .

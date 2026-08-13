@@ -2,11 +2,19 @@
 
 from datetime import date
 from typing import Final
+from uuid import uuid4
 
 import pytest
 from pydantic import ValidationError
 
-from orient.domain.models import CrossAsset, Returns, Signals, TrendDistance
+from orient.domain.models import (
+    Claim,
+    ClaimKind,
+    CrossAsset,
+    Returns,
+    Signals,
+    TrendDistance,
+)
 
 
 def test_the_curve_spread_is_derived_from_the_two_yields() -> None:
@@ -38,3 +46,26 @@ def test_a_signals_snapshot_cannot_be_mutated_after_the_fact() -> None:
 def test_an_unknown_field_is_rejected_rather_than_silently_kept() -> None:
     with pytest.raises(ValidationError):
         _ = TrendDistance(from_20_day=0.1)  # pyright: ignore[reportCallIssue]  # the point of the test
+
+
+def _claim(kind: ClaimKind, target_date: date | None) -> Claim:
+    return Claim(
+        id=uuid4(),
+        summary_id=uuid4(),
+        subject_symbol="^GSPC",
+        session_date=date(2026, 8, 12),
+        kind=kind,
+        statement="Volatility should compress into the print.",
+        target_date=target_date,
+    )
+
+
+def test_an_expectation_without_a_target_date_is_rejected() -> None:
+    """Mirrors the table CHECK, so an unresolvable expectation fails before it reaches Postgres."""
+    with pytest.raises(ValidationError, match="target_date"):
+        _ = _claim("expectation", None)
+
+
+@pytest.mark.parametrize("kind", ["observation", "anomaly"])
+def test_other_claim_kinds_need_no_target_date(kind: ClaimKind) -> None:
+    assert _claim(kind, None).target_date is None

@@ -5,14 +5,20 @@ re-rendered from months later. Anything able to mutate one in flight would silen
 history that a published summary still cites.
 """
 
+from collections.abc import Mapping
+from dataclasses import dataclass
 from datetime import date, datetime
-from typing import Final, Literal
+from typing import Final, Literal, Self
+from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, computed_field, field_validator
+from pydantic import BaseModel, ConfigDict, computed_field, field_validator, model_validator
 
 AssetClass = Literal["equity", "etf", "index", "future", "currency", "crypto", "fund"]
 ReadingLevel = Literal["beginner", "intermediate", "advanced"]
 ClaimKind = Literal["observation", "expectation", "anomaly"]
+ClaimResolution = Literal["supported", "contradicted", "unresolved"]
+SummaryStatus = Literal["ok", "caveated"]
+RunStatus = Literal["running", "ok", "caveated", "failed", "cancelled"]
 
 SIGNALS_VERSION: Final = "1"
 SKILL_VERSION: Final = "1"
@@ -115,3 +121,93 @@ class Signals(_Frozen):
     breadth: Breadth | None = None
     cross_asset: CrossAsset | None = None
     version: str = SIGNALS_VERSION
+
+
+class Section(_Frozen):
+    heading: str
+    body: str
+
+
+class Annotation(_Frozen):
+    """A term the writer flagged, defined for the way it used the term rather than generically."""
+
+    term: str
+    definition: str
+
+
+class ModelUsage(_Frozen):
+    calls: int = 0
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class SummaryKey:
+    """Every field that reaches the prompt. A summary served for one key was written for it."""
+
+    symbol: str
+    session_date: date
+    level: ReadingLevel
+    signals_version: str = SIGNALS_VERSION
+    skill_version: str = SKILL_VERSION
+
+
+class Summary(_Frozen):
+    id: UUID
+    symbol: str
+    session_date: date
+    level: ReadingLevel
+    status: SummaryStatus
+    sections: tuple[Section, ...]
+    signals_snapshot: Signals
+    annotations: tuple[Annotation, ...] = ()
+    signals_version: str = SIGNALS_VERSION
+    skill_version: str = SKILL_VERSION
+    pinned: bool = False
+    run_id: UUID | None = None
+    created_at: datetime | None = None
+
+    @property
+    def key(self) -> SummaryKey:
+        return SummaryKey(
+            symbol=self.symbol,
+            session_date=self.session_date,
+            level=self.level,
+            signals_version=self.signals_version,
+            skill_version=self.skill_version,
+        )
+
+
+class Claim(_Frozen):
+    id: UUID
+    summary_id: UUID
+    subject_symbol: str
+    session_date: date
+    kind: ClaimKind
+    statement: str
+    mentioned_symbols: tuple[str, ...] = ()
+    attribution: str | None = None
+    target_date: date | None = None
+    resolved_by: UUID | None = None
+    resolution: ClaimResolution | None = None
+
+    @model_validator(mode="after")
+    def _expectation_needs_a_target(self) -> Self:
+        """Mirrors the table's CHECK, so a malformed claim fails before it reaches Postgres."""
+        if self.kind == "expectation" and self.target_date is None:
+            message = "an expectation claim must carry a target_date"
+            raise ValueError(message)
+        return self
+
+
+class Run(_Frozen):
+    id: UUID
+    symbol: str
+    session_date: date
+    level: ReadingLevel
+    status: RunStatus
+    trace_id: str | None = None
+    phase_timings: Mapping[str, float] = {}
+    model_usage: Mapping[str, ModelUsage] = {}
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
