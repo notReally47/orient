@@ -1,0 +1,68 @@
+name: orient
+
+services:
+  db:
+    image: docker.io/pgvector/pgvector:pg18
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-market}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-market}
+      POSTGRES_DB: ${POSTGRES_DB:-orient}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql
+      - ./db/bootstrap:/docker-entrypoint-initdb.d:ro,z
+    healthcheck:
+      test: ["CMD-SHELL", "psql -U ${POSTGRES_USER:-market} -d litellm -c 'SELECT 1' > /dev/null 2>&1"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  jaeger:
+    image: docker.io/jaegertracing/jaeger:2.10.0
+    ports:
+      - "16686:16686"
+      - "4318:4318"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:16686/ >/dev/null 2>&1 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  headroom:
+    image: ghcr.io/chopratejas/headroom:0.6.7
+    command: ["--port", "8787", "--host", "0.0.0.0"]
+    environment:
+      HEADROOM_COMPRESS_USER_MESSAGES: "1"
+      HEADROOM_COMPRESS_ALLOW_REMOTE: "1"
+      HEADROOM_OUTPUT_SHAPER: "${HEADROOM_OUTPUT_SHAPER:-1}"
+      HEADROOM_UPDATE_CHECK: "off"
+    ports:
+      - "8787:8787"
+
+  litellm:
+    image: ghcr.io/berriai/litellm:v1.96.2
+    depends_on:
+      db:
+        condition: service_healthy
+    command: ["--config", "/app/config.yaml", "--port", "4000", "--detailed_debug", "--use_v2_migration_resolver"]
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-market}:${POSTGRES_PASSWORD:-market}@db:5432/litellm
+      STORE_MODEL_IN_DB: "True"
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:?set LITELLM_MASTER_KEY in .env}
+      LITELLM_SALT_KEY: ${LITELLM_SALT_KEY:?set LITELLM_SALT_KEY in .env}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:?set GEMINI_API_KEY in .env}
+      GEMINI_API_KEY_2: ${GEMINI_API_KEY_2:-}
+      EXA_API_KEY: ${EXA_API_KEY:?set EXA_API_KEY in .env}
+      HEADROOM_API_BASE: http://headroom:8787
+      LITELLM_OTEL_V2: "true"
+      OTEL_EXPORTER: otlp_http
+      OTEL_ENDPOINT: http://jaeger:4318
+      OTEL_SERVICE_NAME: litellm-proxy
+    volumes:
+      - ./proxy/config.yaml:/app/config.yaml:ro,z
+    ports:
+      - "4000:4000"
+
+volumes:
+  pgdata:
