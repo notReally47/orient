@@ -5,7 +5,7 @@ COMPOSE ?= podman compose
 PKG     := orient
 RUN     := uv run --package $(PKG)
 
-.PHONY: help bootstrap up down reset logs migrate probe test test-integration lint format typecheck check clean
+.PHONY: help bootstrap up down reset logs migrate probe shapes test test-integration lint format typecheck check clean
 
 help:
 	@grep -E '^[a-z-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-12s %s\n", $$1, $$2}'
@@ -37,6 +37,10 @@ migrate: ## Start the stack if needed, then apply db/migrations/*.sql in order. 
 
 probe: ## Verify every external dependency. Nothing is built on top until this is green.
 	$(RUN) python -m orient.probe
+
+
+shapes: ## Print what each Yahoo surface actually returns. Re-run when a provider starts failing.
+	$(RUN) python -m orient.providers.shapes
 
 test: ## Run the offline test suite
 	$(RUN) pytest
