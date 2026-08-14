@@ -1,0 +1,169 @@
+"""What the market-data tools hand back.
+
+Separate from `models` because these are fetched rather than persisted: nothing here is
+written to a table, and keeping the two apart stops the persisted models from acquiring
+fields that only exist because a vendor returns them.
+
+Almost every field is optional. Yahoo omits rather than nulls, and it omits different things
+for an ETF than for an equity, so a required field would turn a partial answer into no answer
+at all. A tool returning what it has beats a tool raising because one figure was missing.
+"""
+
+from collections.abc import Mapping
+from typing import Literal
+
+from orient.domain.models import AssetClass, Breadth, CalendarDate, CrossAsset, Frozen
+
+CalendarKind = Literal["earnings", "economic", "ipo", "split"]
+
+
+class InstrumentMatch(Frozen):
+    symbol: str
+    name: str | None = None
+    quote_type: str | None = None
+    exchange: str | None = None
+    sector: str | None = None
+    industry: str | None = None
+    price: float | None = None
+    change_percent: float | None = None
+
+
+class Holding(Frozen):
+    symbol: str | None = None
+    name: str | None = None
+    weight: float | None = None
+
+
+class InstrumentProfile(Frozen):
+    symbol: str
+    name: str | None = None
+    asset_class: AssetClass | None = None
+    sector: str | None = None
+    industry: str | None = None
+    exchange: str | None = None
+    currency: str | None = None
+    market_cap: float | None = None
+    beta: float | None = None
+    trailing_pe: float | None = None
+    forward_pe: float | None = None
+    dividend_yield: float | None = None
+    fifty_two_week_high: float | None = None
+    fifty_two_week_low: float | None = None
+    average_volume: float | None = None
+    shares_outstanding: float | None = None
+    description: str | None = None
+    holdings: tuple[Holding, ...] = ()
+    sector_weights: Mapping[str, float] = {}
+
+
+class MarketSession(Frozen):
+    name: str | None = None
+    status: str | None = None
+    opens_at: str | None = None
+    closes_at: str | None = None
+    timezone: str | None = None
+
+
+class SectorMove(Frozen):
+    symbol: str
+    name: str
+    change_percent: float | None = None
+
+
+class MarketContext(Frozen):
+    """Breadth and contribution here are sector-level, counted across the eleven sector ETFs.
+
+    yfinance exposes no membership list for an index, so this is not constituent breadth and
+    the field names say sector so a writer cannot mistake it for one.
+    """
+
+    session: MarketSession | None = None
+    cross_asset: CrossAsset = CrossAsset()
+    sectors: tuple[SectorMove, ...] = ()
+    sector_breadth: Breadth | None = None
+
+
+class EarningsEvent(Frozen):
+    event_date: CalendarDate
+    eps_estimate: float | None = None
+    reported_eps: float | None = None
+    surprise_percent: float | None = None
+
+
+class EarningsEstimate(Frozen):
+    period: str
+    average: float | None = None
+    low: float | None = None
+    high: float | None = None
+    year_ago_eps: float | None = None
+    analysts: int | None = None
+    growth: float | None = None
+
+
+class EpsTrend(Frozen):
+    period: str
+    current: float | None = None
+    days_ago_7: float | None = None
+    days_ago_30: float | None = None
+    days_ago_60: float | None = None
+    days_ago_90: float | None = None
+
+
+class EpsRevisions(Frozen):
+    period: str
+    up_last_7_days: int | None = None
+    up_last_30_days: int | None = None
+    down_last_7_days: int | None = None
+    down_last_30_days: int | None = None
+
+
+class PriceTargets(Frozen):
+    current: float | None = None
+    low: float | None = None
+    high: float | None = None
+    mean: float | None = None
+    median: float | None = None
+
+
+class RatingAction(Frozen):
+    graded_at: CalendarDate
+    firm: str | None = None
+    to_grade: str | None = None
+    from_grade: str | None = None
+    action: str | None = None
+
+
+class ImpliedMove(Frozen):
+    """One figure from the nearest expiry, which is all a summary should ever quote from options."""
+
+    expiry: CalendarDate
+    implied_volatility: float
+    implied_move_percent: float
+
+
+class EarningsDetail(Frozen):
+    symbol: str
+    events: tuple[EarningsEvent, ...] = ()
+    estimates: tuple[EarningsEstimate, ...] = ()
+    trend: tuple[EpsTrend, ...] = ()
+    revisions: tuple[EpsRevisions, ...] = ()
+    price_targets: PriceTargets | None = None
+    recent_actions: tuple[RatingAction, ...] = ()
+    implied_move: ImpliedMove | None = None
+
+
+class CalendarEntry(Frozen):
+    """One shape for all four calendars, so the model never has to pick which kind it wants."""
+
+    kind: CalendarKind
+    label: str
+    symbol: str | None = None
+    occurs_at: CalendarDate | None = None
+    detail: str | None = None
+
+
+class NewsArticle(Frozen):
+    title: str
+    url: str
+    published: str | None = None
+    snippet: str | None = None

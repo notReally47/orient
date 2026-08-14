@@ -4,6 +4,10 @@ yfinance and pandas-datareader ship no type information, so every call into them
 Unknown under strict checking. Confining them here keeps the suppressions in one reviewable
 place and leaves the rest of the package strict. Callers get plain records keyed to the domain
 model's field names and validate them into that model themselves.
+
+Most of these frames carry their real key in the index rather than a column, and the name it
+takes after `reset_index()` differs per surface, so each function renames it here. `make shapes`
+prints the current names; re-run it when one of these starts returning nulls.
 """
 
 from collections.abc import Mapping, Sequence
@@ -14,6 +18,9 @@ import pandas_datareader.data as web
 import yfinance as yf
 
 Records = Sequence[Mapping[str, object]]
+NestedRecords = Sequence[Mapping[tuple[str, str], object]]
+
+DATE_KEY: Final = ("Date", "")
 
 
 class _Frame(Protocol):
@@ -21,6 +28,13 @@ class _Frame(Protocol):
 
     def reset_index(self) -> "_Frame": ...
     def to_dict(self, orient: str) -> Records: ...
+
+
+class _NestedFrame(Protocol):
+    """A multi-symbol download, whose MultiIndex columns become tuple keys rather than strings."""
+
+    def reset_index(self) -> "_NestedFrame": ...
+    def to_dict(self, orient: str) -> NestedRecords: ...
 
 
 def _records(frame: _Frame) -> Records:
@@ -41,6 +55,331 @@ def yahoo_daily_bars(symbol: str, period: str) -> Records:
             "low": row.get("Low"),
             "close": row.get("Close"),
             "volume": row.get("Volume"),
+        }
+        for row in _records(frame)
+    )
+
+
+def yahoo_multi_bars(symbols: Sequence[str], period: str) -> Mapping[str, Records]:
+    """One download for many symbols. Columns come back as (field, symbol) pairs even for one."""
+    frame: Final = cast(
+        "_NestedFrame",
+        yf.download(list(symbols), period=period, progress=False),  # pyright: ignore[reportUnknownMemberType]  # no stubs
+    )
+    rows: Final = frame.reset_index().to_dict(orient="records")
+    return {
+        symbol: tuple(
+            {
+                "session_date": row.get(DATE_KEY),
+                "open": row.get(("Open", symbol)),
+                "high": row.get(("High", symbol)),
+                "low": row.get(("Low", symbol)),
+                "close": row.get(("Close", symbol)),
+                "volume": row.get(("Volume", symbol)),
+            }
+            for row in rows
+        )
+        for symbol in symbols
+    }
+
+
+def yahoo_lookup(query: str, kind: str, count: int) -> Records:
+    lookup: Final = yf.Lookup(query)
+    frame: Final = cast(
+        "_Frame",
+        getattr(lookup, f"get_{kind}")(count=count),  # pyright: ignore[reportUnknownMemberType, reportAny]  # no stubs
+    )
+    return tuple(
+        {
+            "symbol": row.get("symbol"),
+            "name": row.get("shortName"),
+            "quote_type": row.get("quoteType"),
+            "exchange": row.get("exchange"),
+            "industry": row.get("industryName"),
+            "price": row.get("regularMarketPrice"),
+            "change_percent": row.get("regularMarketPercentChange"),
+        }
+        for row in _records(frame)
+    )
+
+
+def yahoo_search(query: str, count: int) -> Records:
+    quotes: Final = cast(
+        "Records",
+        yf.Search(query, max_results=count).quotes,  # pyright: ignore[reportUnknownMemberType]  # no stubs
+    )
+    return tuple(
+        {
+            "symbol": row.get("symbol"),
+            "name": row.get("longname", row.get("shortname")),
+            "quote_type": row.get("quoteType"),
+            "exchange": row.get("exchange"),
+            "industry": row.get("industry"),
+            "sector": row.get("sector"),
+        }
+        for row in quotes
+    )
+
+
+def yahoo_screen(key: str, count: int) -> Records:
+    result: Final = cast(
+        "Mapping[str, object]",
+        yf.screen(key, count=count),  # pyright: ignore[reportUnknownMemberType]  # no stubs
+    )
+    quotes: Final = cast("Records", result.get("quotes") or ())
+    return tuple(
+        {
+            "symbol": row.get("symbol"),
+            "name": row.get("shortName", row.get("displayName")),
+            "quote_type": row.get("quoteType"),
+            "exchange": row.get("fullExchangeName", row.get("exchange")),
+            "price": row.get("regularMarketPrice"),
+            "change_percent": row.get("regularMarketChangePercent"),
+        }
+        for row in quotes
+    )
+
+
+def yahoo_info(symbol: str) -> Mapping[str, object]:
+    return cast(
+        "Mapping[str, object]",
+        yf.Ticker(symbol).info,  # pyright: ignore[reportUnknownMemberType]  # no stubs
+    )
+
+
+def yahoo_fund_holdings(symbol: str) -> Records:
+    frame: Final = cast(
+        "_Frame",
+        yf.Ticker(symbol).funds_data.top_holdings,  # pyright: ignore[reportUnknownMemberType]  # no stubs
+    )
+    return tuple(
+        {"symbol": row.get("Symbol"), "name": row.get("Name"), "weight": row.get("Holding Percent")}
+        for row in _records(frame)
+    )
+
+
+def yahoo_fund_sector_weights(symbol: str) -> Mapping[str, object]:
+    return cast(
+        "Mapping[str, object]",
+        yf.Ticker(symbol).funds_data.sector_weightings,  # pyright: ignore[reportUnknownMemberType]  # no stubs
+    )
+
+
+def yahoo_market_status(region: str) -> Mapping[str, object]:
+    return cast(
+        "Mapping[str, object]",
+        yf.Market(region).status,  # pyright: ignore[reportUnknownMemberType]  # no stubs
+    )
+
+
+def yahoo_sector_overview(key: str) -> Mapping[str, object]:
+    return cast(
+        "Mapping[str, object]",
+        yf.Sector(key).overview,  # pyright: ignore[reportUnknownMemberType]  # no stubs
+    )
+
+
+def yahoo_sector_companies(key: str) -> Records:
+    frame: Final = cast(
+        "_Frame",
+        yf.Sector(key).top_companies,  # pyright: ignore[reportUnknownMemberType]  # no stubs
+    )
+    return tuple(
+        {
+            "symbol": row.get("symbol"),
+            "name": row.get("name"),
+            "rating": row.get("rating"),
+            "market_weight": row.get("market weight"),
+        }
+        for row in _records(frame)
+    )
+
+
+def yahoo_earnings_dates(symbol: str) -> Records:
+    frame: Final = cast(
+        "_Frame",
+        yf.Ticker(symbol).earnings_dates,  # pyright: ignore[reportUnknownMemberType]  # no stubs
+    )
+    return tuple(
+        {
+            "event_date": row.get("Earnings Date"),
+            "eps_estimate": row.get("EPS Estimate"),
+            "reported_eps": row.get("Reported EPS"),
+            "surprise_percent": row.get("Surprise(%)"),
+        }
+        for row in _records(frame)
+    )
+
+
+def yahoo_earnings_estimate(symbol: str) -> Records:
+    frame: Final = cast(
+        "_Frame",
+        yf.Ticker(symbol).earnings_estimate,  # pyright: ignore[reportUnknownMemberType]  # no stubs
+    )
+    return tuple(
+        {
+            "period": row.get("period"),
+            "average": row.get("avg"),
+            "low": row.get("low"),
+            "high": row.get("high"),
+            "year_ago_eps": row.get("yearAgoEps"),
+            "analysts": row.get("numberOfAnalysts"),
+            "growth": row.get("growth"),
+        }
+        for row in _records(frame)
+    )
+
+
+def yahoo_eps_trend(symbol: str) -> Records:
+    frame: Final = cast(
+        "_Frame",
+        yf.Ticker(symbol).eps_trend,  # pyright: ignore[reportUnknownMemberType]  # no stubs
+    )
+    return tuple(
+        {
+            "period": row.get("period"),
+            "current": row.get("current"),
+            "days_ago_7": row.get("7daysAgo"),
+            "days_ago_30": row.get("30daysAgo"),
+            "days_ago_60": row.get("60daysAgo"),
+            "days_ago_90": row.get("90daysAgo"),
+        }
+        for row in _records(frame)
+    )
+
+
+def yahoo_eps_revisions(symbol: str) -> Records:
+    """Note `downLast7Days` capitalises the D while the other three do not."""
+    frame: Final = cast(
+        "_Frame",
+        yf.Ticker(symbol).eps_revisions,  # pyright: ignore[reportUnknownMemberType]  # no stubs
+    )
+    return tuple(
+        {
+            "period": row.get("period"),
+            "up_last_7_days": row.get("upLast7days"),
+            "up_last_30_days": row.get("upLast30days"),
+            "down_last_7_days": row.get("downLast7Days"),
+            "down_last_30_days": row.get("downLast30days"),
+        }
+        for row in _records(frame)
+    )
+
+
+def yahoo_price_targets(symbol: str) -> Mapping[str, object]:
+    return cast(
+        "Mapping[str, object]",
+        yf.Ticker(symbol).analyst_price_targets,  # pyright: ignore[reportUnknownMemberType]  # no stubs
+    )
+
+
+def yahoo_rating_actions(symbol: str) -> Records:
+    frame: Final = cast(
+        "_Frame",
+        yf.Ticker(symbol).upgrades_downgrades,  # pyright: ignore[reportUnknownMemberType]  # no stubs
+    )
+    return tuple(
+        {
+            "graded_at": row.get("GradeDate"),
+            "firm": row.get("Firm"),
+            "to_grade": row.get("ToGrade"),
+            "from_grade": row.get("FromGrade"),
+            "action": row.get("Action"),
+        }
+        for row in _records(frame)
+    )
+
+
+def yahoo_option_expiries(symbol: str) -> Sequence[str]:
+    return cast(
+        "Sequence[str]",
+        yf.Ticker(symbol).options,  # pyright: ignore[reportUnknownMemberType]  # no stubs
+    )
+
+
+def yahoo_option_calls(symbol: str, expiry: str) -> Records:
+    frame: Final = cast(
+        "_Frame",
+        yf.Ticker(symbol).option_chain(expiry).calls,  # pyright: ignore[reportUnknownMemberType]  # no stubs
+    )
+    return tuple(
+        {
+            "strike": row.get("strike"),
+            "last_price": row.get("lastPrice"),
+            "implied_volatility": row.get("impliedVolatility"),
+            "in_the_money": row.get("inTheMoney"),
+        }
+        for row in _records(frame)
+    )
+
+
+def yahoo_earnings_calendar(start: date, end: date) -> Records:
+    frame: Final = cast(
+        "_Frame",
+        yf.Calendars(start, end).earnings_calendar,  # pyright: ignore[reportUnknownMemberType]  # no stubs
+    )
+    return tuple(
+        {
+            "symbol": row.get("Symbol"),
+            "company": row.get("Company"),
+            "event_name": row.get("Event Name"),
+            "starts_at": row.get("Event Start Date"),
+            "timing": row.get("Timing"),
+            "eps_estimate": row.get("EPS Estimate"),
+        }
+        for row in _records(frame)
+    )
+
+
+def yahoo_economic_calendar(start: date, end: date) -> Records:
+    frame: Final = cast(
+        "_Frame",
+        yf.Calendars(start, end).economic_events_calendar,  # pyright: ignore[reportUnknownMemberType]  # no stubs
+    )
+    return tuple(
+        {
+            "event": row.get("Event"),
+            "region": row.get("Region"),
+            "event_time": row.get("Event Time"),
+            "period": row.get("For"),
+            "actual": row.get("Actual"),
+            "expected": row.get("Expected"),
+            "previous": row.get("Last"),
+        }
+        for row in _records(frame)
+    )
+
+
+def yahoo_ipo_calendar(start: date, end: date) -> Records:
+    frame: Final = cast(
+        "_Frame",
+        yf.Calendars(start, end).ipo_info_calendar,  # pyright: ignore[reportUnknownMemberType]  # no stubs
+    )
+    return tuple(
+        {
+            "symbol": row.get("Symbol"),
+            "company": row.get("Company"),
+            "exchange": row.get("Exchange"),
+            "event_date": row.get("Date"),
+            "price": row.get("Price"),
+            "currency": row.get("Currency"),
+        }
+        for row in _records(frame)
+    )
+
+
+def yahoo_splits_calendar(start: date, end: date) -> Records:
+    frame: Final = cast(
+        "_Frame",
+        yf.Calendars(start, end).splits_calendar,  # pyright: ignore[reportUnknownMemberType]  # no stubs
+    )
+    return tuple(
+        {
+            "symbol": row.get("Symbol"),
+            "company": row.get("Company"),
+            "payable_on": row.get("Payable On"),
+            "old_share_worth": row.get("Old Share Worth"),
+            "share_worth": row.get("Share Worth"),
         }
         for row in _records(frame)
     )

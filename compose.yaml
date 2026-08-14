@@ -13,7 +13,7 @@ services:
       - pgdata:/var/lib/postgresql
       - ./db/bootstrap:/docker-entrypoint-initdb.d:ro,z
     healthcheck:
-      test: ["CMD-SHELL", "psql -U ${POSTGRES_USER:-market} -d litellm -c 'SELECT 1' > /dev/null 2>&1"]
+      test: [ "CMD-SHELL", "psql -U ${POSTGRES_USER:-market} -d litellm -c 'SELECT 1' > /dev/null 2>&1" ]
       interval: 5s
       timeout: 5s
       retries: 20
@@ -24,14 +24,14 @@ services:
       - "16686:16686"
       - "4318:4318"
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:16686/ >/dev/null 2>&1 || exit 1"]
+      test: [ "CMD-SHELL", "wget -qO- http://localhost:16686/ >/dev/null 2>&1 || exit 1" ]
       interval: 10s
       timeout: 5s
       retries: 12
 
   headroom:
     image: ghcr.io/chopratejas/headroom:0.6.7
-    command: ["--port", "8787", "--host", "0.0.0.0"]
+    command: [ "--port", "8787", "--host", "0.0.0.0" ]
     environment:
       HEADROOM_COMPRESS_USER_MESSAGES: "1"
       HEADROOM_COMPRESS_ALLOW_REMOTE: "1"
@@ -45,7 +45,7 @@ services:
     depends_on:
       db:
         condition: service_healthy
-    command: ["--config", "/app/config.yaml", "--port", "4000", "--detailed_debug", "--use_v2_migration_resolver"]
+    command: [ "--config", "/app/config.yaml", "--port", "4000", "--detailed_debug", "--use_v2_migration_resolver" ]
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-market}:${POSTGRES_PASSWORD:-market}@db:5432/litellm
       STORE_MODEL_IN_DB: "True"
@@ -63,6 +63,22 @@ services:
       - ./proxy/config.yaml:/app/config.yaml:ro,z
     ports:
       - "4000:4000"
+
+  mcp:
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+    command: [ "--transport", "streamable-http", "--host", "0.0.0.0", "--port", "9000" ]
+    environment:
+      MS_DATABASE_URL: postgresql://${POSTGRES_USER:-market}:${POSTGRES_PASSWORD:-market}@db:5432/${POSTGRES_DB:-orient}
+      MS_PROXY_BASE_URL: http://litellm:4000
+      MS_PROXY_API_KEY: ${LITELLM_MASTER_KEY:?set LITELLM_MASTER_KEY in .env}
+      MS_EMBEDDING_MODEL: ${MS_EMBEDDING_MODEL:-embedding-model}
+      MS_EMBEDDING_DIMENSIONS: ${MS_EMBEDDING_DIMENSIONS:-1536}
+      MS_SEARCH_TOOL_NAME: ${MS_SEARCH_TOOL_NAME:-exa-search}
+    ports:
+      - "9000:9000"
 
 volumes:
   pgdata:

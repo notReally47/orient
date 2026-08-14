@@ -37,6 +37,21 @@ The proxy runs against its own `litellm` database, kept apart from the applicati
 because it reconciles whatever database it is given against its own schema and drops
 every table absent from it
 
+## The tool server
+
+Nine tools over MCP, served by the `mcp` container on port 9000. Point any MCP client at
+`http://localhost:9000/mcp`, or run the image with `--transport stdio` to have a client
+launch it directly. For Claude Code:
+
+```bash
+claude mcp add --transport http orient http://localhost:9000/mcp
+```
+
+Every figure the tools return was measured. A window too short to compute comes back null
+rather than approximated, so a null means unknown. Breadth and sector contribution are counted
+across the eleven sector ETFs and never across index constituents, because no constituent list
+is available; the field names say sector for that reason
+
 `make probe` is not optional. It checks Postgres and the pgvector extension, the
 proxy's health, that all four model roles resolve, that both guardrails loaded, a
 real chat completion, a 1536-dimension embedding, Exa search through the proxy, the

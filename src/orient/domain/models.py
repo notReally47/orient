@@ -8,10 +8,10 @@ history that a published summary still cites.
 from collections.abc import Mapping
 from dataclasses import dataclass
 from datetime import date, datetime
-from typing import Final, Literal, Self
+from typing import Annotated, Final, Literal, Self, cast
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, computed_field, field_validator, model_validator
+from pydantic import BaseModel, BeforeValidator, ConfigDict, computed_field, model_validator
 
 AssetClass = Literal["equity", "etf", "index", "future", "currency", "crypto", "fund"]
 ReadingLevel = Literal["beginner", "intermediate", "advanced"]
@@ -24,36 +24,33 @@ SIGNALS_VERSION: Final = "1"
 SKILL_VERSION: Final = "1"
 
 
-class _Frozen(BaseModel):
+class Frozen(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
 
-class Bar(_Frozen):
-    session_date: date
+def _drop_time(value: object) -> object:
+    """Yahoo dates a daily row with a timestamp, sometimes tz-aware. A daily row is a date."""
+    return value.date() if isinstance(value, datetime) else value
+
+
+CalendarDate = Annotated[date, BeforeValidator(_drop_time)]
+
+
+class Bar(Frozen):
+    session_date: CalendarDate
     open: float
     high: float
     low: float
     close: float
     volume: int
 
-    @field_validator("session_date", mode="before")
-    @classmethod
-    def _drop_time(cls, value: object) -> object:
-        """Price feeds hand back midnight timestamps; a daily bar is a date."""
-        return value.date() if isinstance(value, datetime) else value
 
-
-class Observation(_Frozen):
-    observation_date: date
+class Observation(Frozen):
+    observation_date: CalendarDate
     value: float
 
-    @field_validator("observation_date", mode="before")
-    @classmethod
-    def _drop_time(cls, value: object) -> object:
-        return value.date() if isinstance(value, datetime) else value
 
-
-class Instrument(_Frozen):
+class Instrument(Frozen):
     symbol: str
     asset_class: AssetClass
     name: str
@@ -62,7 +59,7 @@ class Instrument(_Frozen):
     currency: str | None = None
 
 
-class Returns(_Frozen):
+class Returns(Frozen):
     one_day: float | None = None
     one_week: float | None = None
     one_month: float | None = None
@@ -70,19 +67,19 @@ class Returns(_Frozen):
     year_to_date: float | None = None
 
 
-class TrendDistance(_Frozen):
+class TrendDistance(Frozen):
     """Close relative to its moving averages, as a fraction: 0.03 is three percent above."""
 
     from_50_day: float | None = None
     from_200_day: float | None = None
 
 
-class Contributor(_Frozen):
+class Contributor(Frozen):
     symbol: str
     contribution: float
 
 
-class Breadth(_Frozen):
+class Breadth(Frozen):
     advancers: int
     decliners: int
     unchanged: int
@@ -90,7 +87,7 @@ class Breadth(_Frozen):
     bottom: tuple[Contributor, ...] = ()
 
 
-class CrossAsset(_Frozen):
+class CrossAsset(Frozen):
     vix: float | None = None
     vix_change: float | None = None
     yield_10y: float | None = None
@@ -99,6 +96,20 @@ class CrossAsset(_Frozen):
     dollar_index: float | None = None
     crude_oil: float | None = None
     gold: float | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _ignore_the_derived_field(cls, value: object) -> object:
+        """A computed field is written out but cannot be read back while extras are forbidden.
+
+        Without this, a snapshot containing cross-asset data serialises to jsonb happily and
+        then fails validation the moment it is read again, which is the one thing a stored
+        snapshot must never do.
+        """
+        if isinstance(value, Mapping):
+            entries: Mapping[str, object] = cast("Mapping[str, object]", value)
+            return {key: item for key, item in entries.items() if key != "spread_10s2s"}
+        return value
 
     @computed_field
     @property
@@ -109,7 +120,7 @@ class CrossAsset(_Frozen):
         return self.yield_10y - self.yield_2y
 
 
-class Signals(_Frozen):
+class Signals(Frozen):
     symbol: str
     session_date: date
     close: float
@@ -123,19 +134,19 @@ class Signals(_Frozen):
     version: str = SIGNALS_VERSION
 
 
-class Section(_Frozen):
+class Section(Frozen):
     heading: str
     body: str
 
 
-class Annotation(_Frozen):
+class Annotation(Frozen):
     """A term the writer flagged, defined for the way it used the term rather than generically."""
 
     term: str
     definition: str
 
 
-class ModelUsage(_Frozen):
+class ModelUsage(Frozen):
     calls: int = 0
     prompt_tokens: int = 0
     completion_tokens: int = 0
@@ -152,7 +163,7 @@ class SummaryKey:
     skill_version: str = SKILL_VERSION
 
 
-class Summary(_Frozen):
+class Summary(Frozen):
     id: UUID
     symbol: str
     session_date: date
@@ -178,7 +189,7 @@ class Summary(_Frozen):
         )
 
 
-class Claim(_Frozen):
+class Claim(Frozen):
     id: UUID
     summary_id: UUID
     subject_symbol: str
@@ -200,7 +211,7 @@ class Claim(_Frozen):
         return self
 
 
-class Run(_Frozen):
+class Run(Frozen):
     id: UUID
     symbol: str
     session_date: date

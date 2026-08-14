@@ -32,6 +32,7 @@ from orient.probe import (
     check_search,
     check_yahoo,
     classify,
+    describe,
     evaluate_postgres,
     evaluate_proxy_key,
     format_report,
@@ -105,6 +106,7 @@ def _deps(
     return Deps(
         settings=_settings(),
         proxy_master_key="sk-test",
+        mcp_url="http://mcp.test/mcp",
         proxy=client,
         headroom=client,
         jaeger=client,
@@ -206,6 +208,41 @@ def test_market_checks_fail_when_a_provider_returns_nothing() -> None:
     deps: Final = _deps(_json_handler({}), prices=_Prices(0), series=_Series(0))
     assert isinstance(check_yahoo(deps), Failed)
     assert isinstance(check_fred(deps), Failed)
+
+
+def test_a_task_group_failure_reports_its_leaf_rather_than_the_wrapper() -> None:
+    """A bare ExceptionGroup message names nothing, which is the mystery the probe exists to end."""
+    group: Final = BaseExceptionGroup("unhandled errors in a TaskGroup", [ConnectionRefusedError("no listener")])
+    described: Final = describe(group)
+    assert "ConnectionRefusedError" in described
+    assert "no listener" in described
+    assert "TaskGroup" not in described
+
+
+def test_a_nested_group_is_flattened_to_its_causes() -> None:
+    inner: Final = BaseExceptionGroup("inner", [ValueError("first"), KeyError("second")])
+    described: Final = describe(BaseExceptionGroup("outer", [inner]))
+    assert "first" in described
+    assert "second" in described
+
+
+def test_many_causes_are_summarised_rather_than_flooding_the_line() -> None:
+    """One line per check keeps the report readable; a group of twenty must not break that."""
+    group: Final = BaseExceptionGroup("many", [ValueError(f"cause {index}") for index in range(20)])
+    described: Final = describe(group)
+    assert "+17 more" in described
+    assert "\n" not in described
+
+
+def test_a_wrapped_cause_is_named_alongside_its_effect() -> None:
+    """An httpx "All connection attempts failed" says nothing without the refusal underneath it."""
+    refused: Final = ConnectionRefusedError("[Errno 111] Connection refused")
+    failed: Final = OSError("All connection attempts failed")
+    failed.__cause__ = refused
+
+    described: Final = describe(failed)
+    assert "All connection attempts failed" in described
+    assert "ConnectionRefusedError" in described
 
 
 def test_market_checks_report_the_exception_rather_than_raising() -> None:

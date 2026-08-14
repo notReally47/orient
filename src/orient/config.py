@@ -20,6 +20,8 @@ class Settings(BaseSettings):
     proxy_base_url: str = Field(default="http://localhost:4000")
     proxy_api_key: str = Field(description="LiteLLM virtual key or master key")
 
+    mcp_url: str = Field(default="http://localhost:9000/mcp")
+
     headroom_api_base: str = Field(default="http://localhost:8787")
     jaeger_ui_url: str = Field(default="http://localhost:16686")
     otlp_endpoint: str = Field(default="http://localhost:4318")
