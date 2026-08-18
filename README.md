@@ -55,8 +55,27 @@ is available; the field names say sector for that reason
 `make probe` is not optional. It checks Postgres and the pgvector extension, the
 proxy's health, that all four model roles resolve, that both guardrails loaded, a
 real chat completion, a 1536-dimension embedding, Exa search through the proxy, the
-Headroom sidecar, Jaeger, and that Yahoo Finance and FRED are reachable. Nothing is
-built on top of a dependency that has not answered
+Headroom sidecar, the tool server, the orchestrator, Jaeger, and that Yahoo Finance
+and FRED are reachable. Nothing is built on top of a dependency that has not answered
+
+## Running a summary
+
+The orchestrator streams a run as it happens, one server-sent event per phase, per tool
+call and per section:
+
+```bash
+curl -N -X POST http://localhost:8000/runs \
+  -H 'content-type: application/json' \
+  -d '{"symbol":"^GSPC","session_date":"2026-08-13","level":"beginner"}'
+```
+
+Disconnecting cancels the run; the loop checks between tool calls. A summary already
+written for that instrument, date and reading level comes straight back from Postgres
+without a model call
+
+The signals are computed from the latest available history rather than from the date in
+the request, which is what the tools expose today. The date is what the summary is filed
+and cached under, and the measurement date travels with the signals snapshot beside it
 
 ## Layout
 
@@ -70,6 +89,7 @@ built on top of a dependency that has not answered
 | `src/orient/mcp/`          | the MCP tool server                                            |
 | `src/orient/skills/`       | `SKILL.md` tree, progressively loaded                          |
 | `src/orient/orchestrator/` | agent loop, phases, event stream                               |
+| `src/orient/llm/`          | proxy clients: chat, embeddings, search, rate limit            |
 | `src/orient/store/`        | Postgres repositories                                          |
 | `src/orient/gui/`          | Streamlit app                                                  |
 

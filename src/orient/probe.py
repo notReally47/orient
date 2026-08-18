@@ -22,7 +22,7 @@ from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 from mcp import Client
 from orient.config import ProxyEnv, Settings
 from orient.providers.fred import FredProvider
-from orient.providers.protocols import PriceProvider, SeriesProvider
+from orient.providers.protocols import Prices, Series
 from orient.providers.yahoo import YahooPrices
 
 TIMEOUT: Final = httpx.Timeout(30.0)
@@ -74,8 +74,9 @@ class Deps:
     proxy: httpx.Client
     headroom: httpx.Client
     jaeger: httpx.Client
-    prices: PriceProvider
-    series: SeriesProvider
+    orchestrator: httpx.Client
+    prices: Prices
+    series: Series
 
 
 Check = Callable[[Deps], CheckResult]
@@ -121,6 +122,11 @@ class JaegerServices(_Lenient):
     data: list[str] = []
 
 
+class OrchestratorHealth(_Lenient):
+    status: str = ""
+    tools: int = 0
+
+
 _LooseObject: Final = TypeAdapter(dict[str, object])
 
 
@@ -128,7 +134,7 @@ MAX_MEMBERS: Final = 3
 MAX_DETAIL: Final = 160
 
 
-def describe(exc: BaseException) -> str:
+def describe_failure(exc: BaseException) -> str:
     """One line for any exception, so a multi-line driver error cannot break the report's alignment.
 
     Exceptions arrive as trees rather than single values: a group counts its members without naming
@@ -137,14 +143,14 @@ def describe(exc: BaseException) -> str:
     """
     if isinstance(exc, BaseExceptionGroup):
         members: Final = cast("BaseExceptionGroup[BaseException]", exc).exceptions
-        shown: Final = " | ".join(describe(member) for member in members[:MAX_MEMBERS])
+        shown: Final = " | ".join(describe_failure(member) for member in members[:MAX_MEMBERS])
         hidden: Final = len(members) - MAX_MEMBERS
         return f"{shown} (+{hidden} more)" if hidden > 0 else shown
 
     detail: Final = " ".join(str(exc).split())[:MAX_DETAIL]
     named: Final = f"{type(exc).__name__}: {detail}" if detail else type(exc).__name__
     cause: Final = exc.__cause__ or exc.__context__
-    return named if cause is None else f"{named} <- {describe(cause)}"
+    return named if cause is None else f"{named} <- {describe_failure(cause)}"
 
 
 def _sequence_len(value: object) -> int:
@@ -206,7 +212,7 @@ def check_postgres(deps: Deps) -> CheckResult:
             _ = cur.execute("SELECT table_name FROM information_schema.tables WHERE table_schema = 'public'")
             names = [_cell(record) for record in cur.fetchall()]
     except Exception as exc:  # noqa: BLE001  # a probe reports every failure rather than propagating one
-        return Failed(POSTGRES_CHECK, describe(exc))
+        return Failed(POSTGRES_CHECK, describe_failure(exc))
 
     return evaluate_postgres(version, frozenset(entry for entry in names if entry is not None))
 
@@ -216,7 +222,7 @@ def check_proxy_health(deps: Deps) -> CheckResult:
     try:
         response = deps.proxy.get("/health/liveliness")
     except httpx.HTTPError as exc:
-        return Failed(name, describe(exc))
+        return Failed(name, describe_failure(exc))
 
     if not response.is_success:
         return Failed(name, f"HTTP {response.status_code}: {response.text[:160]}")
@@ -233,7 +239,7 @@ def check_proxy_models(deps: Deps) -> CheckResult:
             return Failed(name, f"HTTP {response.status_code}: {response.text[:160]}")
         payload = ModelsResponse.model_validate_json(response.content)
     except (httpx.HTTPError, ValidationError) as exc:
-        return Failed(name, describe(exc))
+        return Failed(name, describe_failure(exc))
 
     served: Final = {entry.id for entry in payload.data}
     missing: Final = [role for role in wanted if role not in served]
@@ -250,7 +256,7 @@ def check_guardrails(deps: Deps) -> CheckResult:
             return Failed(name, f"HTTP {response.status_code}: {response.text[:160]}")
         payload = GuardrailsResponse.model_validate_json(response.content)
     except (httpx.HTTPError, ValidationError) as exc:
-        return Failed(name, describe(exc))
+        return Failed(name, describe_failure(exc))
 
     found: Final = {entry.guardrail_name for entry in payload.guardrails}
     missing: Final = REQUIRED_GUARDRAILS - found
@@ -274,7 +280,7 @@ def check_chat_completion(deps: Deps) -> CheckResult:
             return Failed(name, f"HTTP {response.status_code}: {response.text[:200]}")
         payload = ChatResponse.model_validate_json(response.content)
     except (httpx.HTTPError, ValidationError) as exc:
-        return Failed(name, describe(exc))
+        return Failed(name, describe_failure(exc))
 
     if not payload.choices:
         return Failed(name, "no choices in response")
@@ -297,7 +303,7 @@ def check_embeddings(deps: Deps) -> CheckResult:
             return Failed(name, f"HTTP {response.status_code}: {response.text[:200]}")
         payload = EmbeddingsResponse.model_validate_json(response.content)
     except (httpx.HTTPError, ValidationError) as exc:
-        return Failed(name, describe(exc))
+        return Failed(name, describe_failure(exc))
 
     if not payload.data:
         return Failed(name, "no embedding returned")
@@ -318,7 +324,7 @@ def check_search(deps: Deps) -> CheckResult:
             return Failed(name, f"HTTP {response.status_code}: {response.text[:200]}")
         payload = _LooseObject.validate_json(response.content)
     except (httpx.HTTPError, ValidationError) as exc:
-        return Failed(name, describe(exc))
+        return Failed(name, describe_failure(exc))
 
     count: Final = _sequence_len(payload.get("results") or payload.get("data"))
     if count == 0:
@@ -343,7 +349,7 @@ def check_headroom(deps: Deps) -> CheckResult:
             return Failed(name, f"HTTP {response.status_code}: {response.text[:200]}")
         payload = _LooseObject.validate_json(response.content)
     except (httpx.HTTPError, ValidationError) as exc:
-        return Failed(name, describe(exc))
+        return Failed(name, describe_failure(exc))
 
     if "messages" not in payload:
         return Failed(name, f"no 'messages' in response; keys were {sorted(payload)}")
@@ -358,7 +364,7 @@ def check_jaeger(deps: Deps) -> CheckResult:
             return Failed(name, f"HTTP {response.status_code}")
         payload = JaegerServices.model_validate_json(response.content)
     except (httpx.HTTPError, ValidationError) as exc:
-        return Failed(name, describe(exc))
+        return Failed(name, describe_failure(exc))
 
     if PROXY_SERVICE_NAME not in payload.data:
         return Warned(name, f"reachable, but no {PROXY_SERVICE_NAME} spans yet (services: {payload.data})")
@@ -379,26 +385,42 @@ def evaluate_tools(served: frozenset[str]) -> CheckResult:
     return Passed(MCP_CHECK, f"all {len(EXPECTED_TOOLS)} tools registered")
 
 
-class _ToolName(_Lenient):
-    name: str
-
-
-_TOOL_NAMES: Final = TypeAdapter(tuple[_ToolName, ...])
-
-
 async def _served_tools(url: str) -> frozenset[str]:
-    """The SDK's listing is loosely typed, so it is validated rather than indexed."""
     async with Client(url) as client:
-        result = await client.list_tools()
-        return frozenset(tool.name for tool in result.tools)
+        listed = await client.list_tools()
+        return frozenset(tool.name for tool in listed.tools)
 
 
 def check_mcp(deps: Deps) -> CheckResult:
     try:
         served = asyncio.run(_served_tools(deps.mcp_url))
     except Exception as exc:  # noqa: BLE001  # a probe reports every failure rather than propagating one
-        return Failed(MCP_CHECK, describe(exc))
+        return Failed(MCP_CHECK, describe_failure(exc))
     return evaluate_tools(served)
+
+
+ORCHESTRATOR_CHECK: Final = "orchestrator"
+
+
+def evaluate_orchestrator(health: OrchestratorHealth) -> CheckResult:
+    """Booted is not enough: a service that cannot see the tool server fails at the first run."""
+    if health.status != "ok":
+        return Failed(ORCHESTRATOR_CHECK, f"reachable but reports status '{health.status or 'unknown'}'")
+    if health.tools != len(EXPECTED_TOOLS):
+        return Failed(ORCHESTRATOR_CHECK, f"sees {health.tools} tools, expected {len(EXPECTED_TOOLS)}")
+    return Passed(ORCHESTRATOR_CHECK, f"serving, with all {health.tools} tools in view")
+
+
+def check_orchestrator(deps: Deps) -> CheckResult:
+    try:
+        response = deps.orchestrator.get("/health")
+        if not response.is_success:
+            return Failed(ORCHESTRATOR_CHECK, f"HTTP {response.status_code}: {response.text[:160]}")
+        payload = OrchestratorHealth.model_validate_json(response.content)
+    except (httpx.HTTPError, ValidationError) as exc:
+        return Failed(ORCHESTRATOR_CHECK, describe_failure(exc))
+
+    return evaluate_orchestrator(payload)
 
 
 def check_yahoo(deps: Deps) -> CheckResult:
@@ -406,7 +428,7 @@ def check_yahoo(deps: Deps) -> CheckResult:
     try:
         bars = deps.prices.daily_bars("^GSPC", "5d")
     except Exception as exc:  # noqa: BLE001  # a probe reports every failure rather than propagating one
-        return Failed(name, describe(exc))
+        return Failed(name, describe_failure(exc))
 
     if not bars:
         return Failed(name, "reachable but returned no bars for ^GSPC")
@@ -419,7 +441,7 @@ def check_fred(deps: Deps) -> CheckResult:
     try:
         observations = deps.series.observations("DGS10", end - timedelta(days=30), end)
     except Exception as exc:  # noqa: BLE001  # a probe reports every failure rather than propagating one
-        return Failed(name, describe(exc))
+        return Failed(name, describe_failure(exc))
 
     if not observations:
         return Failed(name, "reachable but returned no observations for DGS10")
@@ -437,6 +459,7 @@ CHECKS: Final[tuple[Check, ...]] = (
     check_search,
     check_headroom,
     check_mcp,
+    check_orchestrator,
     check_jaeger,
     check_yahoo,
     check_fred,
@@ -490,6 +513,7 @@ def main() -> int:
             proxy=stack.enter_context(httpx.Client(base_url=settings.proxy_base_url, headers=auth, timeout=TIMEOUT)),
             headroom=stack.enter_context(httpx.Client(base_url=settings.headroom_api_base, timeout=TIMEOUT)),
             jaeger=stack.enter_context(httpx.Client(base_url=settings.jaeger_ui_url, timeout=TIMEOUT)),
+            orchestrator=stack.enter_context(httpx.Client(base_url=settings.orchestrator_base_url, timeout=TIMEOUT)),
             prices=YahooPrices(),
             series=FredProvider(),
         )

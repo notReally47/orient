@@ -21,8 +21,10 @@ COLUMNS: Final = (
     "session_date",
     "level",
     "status",
+    "thesis",
     "sections",
     "annotations",
+    "calendar",
     "signals_snapshot",
     "signals_version",
     "skill_version",
@@ -52,12 +54,12 @@ _RECENT: Final = SQL("""
 
 _INSERT: Final = SQL("""
     INSERT INTO summaries (
-        id, symbol, session_date, level, status, sections, annotations,
+        id, symbol, session_date, level, status, thesis, sections, annotations, calendar,
         signals_snapshot, signals_version, skill_version, pinned, run_id
     )
     VALUES (
-        %(id)s, %(symbol)s, %(session_date)s, %(level)s, %(status)s, %(sections)s, %(annotations)s,
-        %(signals_snapshot)s, %(signals_version)s, %(skill_version)s, %(pinned)s, %(run_id)s
+        %(id)s, %(symbol)s, %(session_date)s, %(level)s, %(status)s, %(thesis)s, %(sections)s, %(annotations)s,
+        %(calendar)s, %(signals_snapshot)s, %(signals_version)s, %(skill_version)s, %(pinned)s, %(run_id)s
     )
     ON CONFLICT (symbol, session_date, level, signals_version, skill_version) DO NOTHING
 """)
@@ -98,8 +100,10 @@ class SummaryRepository:
             "session_date": summary.session_date,
             "level": summary.level,
             "status": summary.status,
+            "thesis": summary.thesis,
             "sections": Json(payload["sections"]),
             "annotations": Json(payload["annotations"]),
+            "calendar": Json(payload["calendar"]),
             "signals_snapshot": Json(payload["signals_snapshot"]),
             "signals_version": summary.signals_version,
             "skill_version": summary.skill_version,

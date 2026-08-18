@@ -31,10 +31,13 @@ def test_the_curve_spread_survives_serialisation() -> None:
     assert CrossAsset(yield_10y=4.25, yield_2y=3.75).model_dump()["spread_10s2s"] == pytest.approx(0.5)
 
 
-def test_a_snapshot_carrying_cross_asset_data_can_be_read_back() -> None:
-    """The derived field serialises but is not a real field, so reading it back must not be an error.
+def test_a_supplied_spread_cannot_disagree_with_the_yields() -> None:
+    """Derived on the way in, so a caller passing a stale figure gets the right one back."""
+    assert CrossAsset(yield_10y=4.25, yield_2y=3.75, spread_10s2s=99.0).spread_10s2s == pytest.approx(0.5)
 
-    A stored summary that cannot be re-validated is worse than one never stored: it fails on the
+
+def test_a_snapshot_carrying_cross_asset_data_can_be_read_back() -> None:
+    """A stored summary that cannot be re-validated is worse than one never stored: it fails on the
     read, long after the run that produced it, with the data already committed.
     """
     signals: Final = Signals(

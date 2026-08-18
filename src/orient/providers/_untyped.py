@@ -165,33 +165,30 @@ def yahoo_fund_sector_weights(symbol: str) -> Mapping[str, object]:
     )
 
 
-def yahoo_market_status(region: str) -> Mapping[str, object]:
+def market_status_fields(status: Mapping[str, object] | None) -> Mapping[str, object]:
+    """The status payload, named. Separate from the call so a test can drive the real shape.
+
+    The zone arrives nested beside its offset, and the bounds arrive as datetimes rather than as
+    the clock strings they resemble. yfinance answers `None` for a region its endpoint will not
+    serve, and for a parse failure in one it will, so an absent status is an empty session.
+    """
+    if status is None:
+        return {}
+
+    zone: Final = status.get("timezone")
+    return {
+        "name": status.get("name"),
+        "status": status.get("status"),
+        "opens_at": status.get("open"),
+        "closes_at": status.get("close"),
+        "timezone": cast("Mapping[str, object]", zone).get("short") if isinstance(zone, Mapping) else zone,
+    }
+
+
+def yahoo_market_status(region: str) -> Mapping[str, object] | None:
     return cast(
-        "Mapping[str, object]",
+        "Mapping[str, object] | None",
         yf.Market(region).status,  # pyright: ignore[reportUnknownMemberType]  # no stubs
-    )
-
-
-def yahoo_sector_overview(key: str) -> Mapping[str, object]:
-    return cast(
-        "Mapping[str, object]",
-        yf.Sector(key).overview,  # pyright: ignore[reportUnknownMemberType]  # no stubs
-    )
-
-
-def yahoo_sector_companies(key: str) -> Records:
-    frame: Final = cast(
-        "_Frame",
-        yf.Sector(key).top_companies,  # pyright: ignore[reportUnknownMemberType]  # no stubs
-    )
-    return tuple(
-        {
-            "symbol": row.get("symbol"),
-            "name": row.get("name"),
-            "rating": row.get("rating"),
-            "market_weight": row.get("market weight"),
-        }
-        for row in _records(frame)
     )
 
 

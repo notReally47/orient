@@ -5,7 +5,8 @@ column or silently truncates without saying so would send the models off in the 
 direction. The probes themselves need Yahoo and are exercised by running the command.
 """
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
+from datetime import date
 from typing import Final
 
 import pytest
@@ -14,11 +15,25 @@ from orient.providers.shapes import MAX_KEYS, describe, probes, truncate
 
 
 class _Frame:
-    """Stands in for a DataFrame: the formatter only asks for `.columns` and `.index`."""
+    """Stands in for a DataFrame: the formatter asks for columns, index and the first record."""
 
-    def __init__(self, columns: Sequence[str], rows: int, index: Sequence[object] | None = None) -> None:
+    def __init__(
+        self,
+        columns: Sequence[str],
+        rows: int,
+        index: Sequence[object] | None = None,
+        record: Mapping[str, object] | None = None,
+    ) -> None:
         self.columns: Final = list(columns)
         self.index: Final = tuple(range(rows)) if index is None else index
+        self._record: Final = dict(record) if record is not None else dict.fromkeys(columns, "")
+
+    def reset_index(self) -> "_Frame":
+        return self
+
+    def to_dict(self, orient: str) -> list[dict[str, object]]:
+        del orient
+        return [dict(self._record)] if self.index else []
 
 
 def test_a_frame_reports_its_row_count_and_every_column() -> None:
@@ -46,6 +61,23 @@ def test_a_frame_reports_the_name_its_index_will_take_as_a_column() -> None:
 
 def test_an_unnamed_index_reports_none_rather_than_inventing_a_name() -> None:
     assert "index name=None" in describe(_Frame(["shortName"], rows=1))
+
+
+def test_a_frame_reports_the_type_of_each_value_beside_its_name() -> None:
+    """A column whose name is right and whose values are not the declared type is invisible otherwise."""
+    frame: Final = _Frame(
+        ["Company", "Share Worth", "Payable On"],
+        rows=1,
+        record={"Company": "Old Co", "Share Worth": 2, "Payable On": date(2026, 8, 19)},
+    )
+    described: Final = describe(frame)
+    assert "Share Worth: int" in described
+    assert "Company: str" in described
+    assert "Payable On: date" in described
+
+
+def test_a_frame_with_no_rows_says_so_rather_than_guessing_at_types() -> None:
+    assert "values=no rows" in describe(_Frame(["Company"], rows=0))
 
 
 def test_a_mapping_reports_its_keys_sorted() -> None:
@@ -97,7 +129,6 @@ def test_the_dump_covers_every_surface_the_tools_need() -> None:
         "info",
         "funds_data",
         "Market",
-        "Sector",
         "earnings_dates",
         "eps_trend",
         "analyst_price_targets",

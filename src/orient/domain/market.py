@@ -10,11 +10,9 @@ at all. A tool returning what it has beats a tool raising because one figure was
 """
 
 from collections.abc import Mapping
-from typing import Literal
+from datetime import datetime
 
 from orient.domain.models import AssetClass, Breadth, CalendarDate, CrossAsset, Frozen
-
-CalendarKind = Literal["earnings", "economic", "ipo", "split"]
 
 
 class InstrumentMatch(Frozen):
@@ -57,10 +55,16 @@ class InstrumentProfile(Frozen):
 
 
 class MarketSession(Frozen):
+    """A session's bounds are moments, so each adapter converts its vendor's form to one here.
+
+    A string would specify a type without specifying a format, leaving two adapters free to
+    disagree while both satisfying it. The zone name sits beside them for the prose to quote.
+    """
+
     name: str | None = None
     status: str | None = None
-    opens_at: str | None = None
-    closes_at: str | None = None
+    opens_at: datetime | None = None
+    closes_at: datetime | None = None
     timezone: str | None = None
 
 
@@ -71,10 +75,11 @@ class SectorMove(Frozen):
 
 
 class MarketContext(Frozen):
-    """Breadth and contribution here are sector-level, counted across the eleven sector ETFs.
+    """The backdrop a move happened against, fetched as one unit.
 
-    yfinance exposes no membership list for an index, so this is not constituent breadth and
-    the field names say sector so a writer cannot mistake it for one.
+    Breadth and contribution are counted across the sector basket the adapter serves, never
+    across index constituents, because no membership list is available. The field names say
+    sector so a writer cannot mistake it for a constituent count.
     """
 
     session: MarketSession | None = None
@@ -150,16 +155,6 @@ class EarningsDetail(Frozen):
     price_targets: PriceTargets | None = None
     recent_actions: tuple[RatingAction, ...] = ()
     implied_move: ImpliedMove | None = None
-
-
-class CalendarEntry(Frozen):
-    """One shape for all four calendars, so the model never has to pick which kind it wants."""
-
-    kind: CalendarKind
-    label: str
-    symbol: str | None = None
-    occurs_at: CalendarDate | None = None
-    detail: str | None = None
 
 
 class NewsArticle(Frozen):

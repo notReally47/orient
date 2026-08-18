@@ -17,6 +17,7 @@ from psycopg import AsyncConnection
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from orient.domain.models import (
+    Bar,
     Claim,
     Instrument,
     ModelUsage,
@@ -28,6 +29,7 @@ from orient.domain.models import (
     SummaryKey,
     TrendDistance,
 )
+from orient.store.bars import BarRepository
 from orient.store.claims import ClaimRepository
 from orient.store.instruments import InstrumentRepository
 from orient.store.pool import Pool, create_pool
@@ -59,6 +61,8 @@ PREFLIGHT_TIMEOUT: Final = 10
 
 @pytest.fixture
 async def pool() -> AsyncIterator[Pool]:
+    # Connect directly first. The pool retries on failure and reports a wrong DSN or a
+    # stopped stack as an opaque timeout half a minute later; this surfaces the real error.
     async with await AsyncConnection.connect(DSN, connect_timeout=PREFLIGHT_TIMEOUT):
         pass
 
@@ -82,8 +86,9 @@ async def symbol(pool: Pool) -> AsyncIterator[str]:
         yield generated
     finally:
         async with pool.connection() as connection:
-            # instruments cascades to sessions, summaries and their claims; runs stand alone.
+            # instruments cascades to sessions, summaries and their claims; runs and bars stand alone.
             _ = await connection.execute("DELETE FROM runs WHERE symbol = %s", (generated,))
+            _ = await connection.execute("DELETE FROM bars WHERE symbol = %s", (generated,))
             _ = await connection.execute("DELETE FROM instruments WHERE symbol = %s", (generated,))
             _ = await connection.execute("DELETE FROM summaries WHERE symbol = %s", (generated,))
 
@@ -124,6 +129,37 @@ async def test_upserting_an_instrument_twice_updates_rather_than_conflicts(pool:
     assert stored.name == "After"
 
 
+def _bar(symbol_date: date, close: float) -> Bar:
+    return Bar(session_date=symbol_date, open=close, high=close, low=close, close=close, volume=1_000)
+
+
+async def test_bars_are_stored_without_an_instrument_row(pool: Pool, symbol: str) -> None:
+    """The backdrop prices a basket of funds this system will never profile, and stores those bars."""
+    await BarRepository(pool).add(symbol, (_bar(date(2026, 8, 12), 6000.0),))
+
+    assert len(await BarRepository(pool).since(symbol, date(2026, 8, 1))) == 1
+
+
+async def test_re_fetching_a_session_leaves_the_bar_a_summary_already_cited(pool: Pool, symbol: str) -> None:
+    """A past session's bar cannot have changed, so the second write must not rewrite the first."""
+    repository: Final = BarRepository(pool)
+    session_date: Final = date(2026, 8, 12)
+    await repository.add(symbol, (_bar(session_date, 6000.0),))
+    await repository.add(symbol, (_bar(session_date, 1.0),))
+
+    stored: Final = await repository.since(symbol, session_date)
+    assert [bar.close for bar in stored] == [6000.0]
+
+
+async def test_bars_come_back_oldest_first_from_the_requested_date(pool: Pool, symbol: str) -> None:
+    repository: Final = BarRepository(pool)
+    await repository.add(symbol, tuple(_bar(date(2026, 8, day), float(day)) for day in (12, 10, 11)))
+
+    stored: Final = await repository.since(symbol, date(2026, 8, 11))
+
+    assert [bar.session_date.day for bar in stored] == [11, 12]
+
+
 async def test_sessions_come_back_newest_first(pool: Pool, symbol: str) -> None:
     await _seed_instrument(pool, symbol)
     repository: Final = SessionRepository(pool)
@@ -152,6 +188,7 @@ async def test_a_summary_is_found_by_its_whole_key(pool: Pool, symbol: str) -> N
         session_date=session_date,
         level="beginner",
         status="ok",
+        thesis="It gave back Monday's gain.",
         sections=(Section(heading="The big picture", body="It rose."),),
         signals_snapshot=_signals(symbol, session_date),
     )
@@ -176,6 +213,7 @@ async def test_a_different_level_is_a_different_cache_entry(pool: Pool, symbol: 
             session_date=session_date,
             level="beginner",
             status="ok",
+            thesis="It gave back Monday's gain.",
             sections=(Section(heading="H", body="B"),),
             signals_snapshot=_signals(symbol, session_date),
         )
@@ -196,6 +234,7 @@ async def test_claims_are_retrievable_by_similarity(pool: Pool, symbol: str) -> 
             session_date=session_date,
             level="beginner",
             status="ok",
+            thesis="It gave back Monday's gain.",
             sections=(Section(heading="H", body="B"),),
             signals_snapshot=_signals(symbol, session_date),
         )
@@ -239,6 +278,7 @@ async def test_open_claims_exclude_resolved_ones(pool: Pool, symbol: str) -> Non
             session_date=session_date,
             level="beginner",
             status="ok",
+            thesis="It gave back Monday's gain.",
             sections=(Section(heading="H", body="B"),),
             signals_snapshot=_signals(symbol, session_date),
         )
@@ -283,11 +323,22 @@ async def test_a_run_records_its_outcome(pool: Pool, symbol: str) -> None:
     )
     repository: Final = RunRepository(pool)
     await repository.start(run)
-    await repository.finish(run.id, "ok", {"gather": 2.5}, {"primary-model": ModelUsage(calls=3)})
+    await repository.finish(
+        run.id,
+        "ok",
+        {"gather": 2.5, "write": 4.0},
+        (
+            ModelUsage(phase="gather", model="primary-model", calls=3, prompt_tokens=1_200),
+            ModelUsage(phase="write", model="primary-model", calls=1, prompt_tokens=8_400),
+        ),
+    )
 
     stored: Final = await repository.get(run.id)
     assert stored is not None
     assert stored.status == "ok"
     assert stored.phase_timings["gather"] == pytest.approx(2.5)
-    assert stored.model_usage["primary-model"].calls == 3
+    assert {(usage.phase, usage.prompt_tokens) for usage in stored.model_usage} == {
+        ("gather", 1_200),
+        ("write", 8_400),
+    }
     assert stored.finished_at is not None

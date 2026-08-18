@@ -24,6 +24,12 @@ def _traded(record: Mapping[str, object]) -> bool:
     return not (isinstance(close, float) and isnan(close))
 
 
+def _bars(records: Records) -> tuple[Bar, ...]:
+    """Oldest first, because every window calculation above reads the last row as the latest one."""
+    validated: Final = _BARS.validate_python(tuple(row for row in records if _traded(row)))
+    return tuple(sorted(validated, key=lambda bar: bar.session_date))
+
+
 class YahooPrices:
     def __init__(
         self,
@@ -34,13 +40,10 @@ class YahooPrices:
         self._fetch_many: Final = fetch_many
 
     def daily_bars(self, symbol: str, period: str = DEFAULT_PERIOD) -> tuple[Bar, ...]:
-        return _BARS.validate_python(tuple(row for row in self._fetch_one(symbol, period) if _traded(row)))
+        return _bars(self._fetch_one(symbol, period))
 
     def multi_bars(self, symbols: Sequence[str], period: str = DEFAULT_PERIOD) -> Mapping[str, tuple[Bar, ...]]:
         """One request for many symbols. A symbol with nothing usable maps to an empty tuple
         rather than disappearing, so a caller iterating its own list never gets a KeyError."""
         fetched: Final = self._fetch_many(symbols, period)
-        return {
-            symbol: _BARS.validate_python(tuple(row for row in fetched.get(symbol, ()) if _traded(row)))
-            for symbol in symbols
-        }
+        return {symbol: _bars(fetched.get(symbol, ())) for symbol in symbols}

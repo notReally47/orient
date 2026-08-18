@@ -5,7 +5,7 @@ offline while still exercising the same request and parsing path as production.
 """
 
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
 from datetime import date, timedelta
 from typing import Final
 
@@ -16,6 +16,8 @@ from orient.config import Settings
 from orient.domain.models import Bar, Observation
 from orient.probe import (
     EXPECTED_TABLES,
+    EXPECTED_TOOLS,
+    MAX_DETAIL,
     Deps,
     Failed,
     Passed,
@@ -26,19 +28,20 @@ from orient.probe import (
     check_guardrails,
     check_headroom,
     check_jaeger,
+    check_orchestrator,
     check_proxy_health,
     check_proxy_key,
     check_proxy_models,
     check_search,
     check_yahoo,
     classify,
-    describe,
+    describe_failure,
     evaluate_postgres,
     evaluate_proxy_key,
     format_report,
     run,
 )
-from orient.providers.protocols import PriceProvider, SeriesProvider
+from orient.providers.protocols import Prices, Series
 
 Handler = Callable[[httpx.Request], httpx.Response]
 
@@ -73,6 +76,10 @@ class _Prices:
         del symbol, period
         return self._bars
 
+    def multi_bars(self, symbols: Sequence[str], period: str) -> Mapping[str, tuple[Bar, ...]]:
+        del period
+        return dict.fromkeys(symbols, self._bars)
+
 
 class _Series:
     def __init__(self, count: int = 20) -> None:
@@ -90,6 +97,10 @@ class _ExplodingPrices:
         del symbol, period
         raise ConnectionError(_UNREACHABLE)
 
+    def multi_bars(self, symbols: Sequence[str], period: str) -> Mapping[str, tuple[Bar, ...]]:
+        del symbols, period
+        raise ConnectionError(_UNREACHABLE)
+
 
 class _ExplodingSeries:
     def observations(self, series_id: str, start: date, end: date) -> tuple[Observation, ...]:
@@ -99,8 +110,8 @@ class _ExplodingSeries:
 
 def _deps(
     handler: Handler,
-    prices: PriceProvider | None = None,
-    series: SeriesProvider | None = None,
+    prices: Prices | None = None,
+    series: Series | None = None,
 ) -> Deps:
     client: Final = httpx.Client(transport=httpx.MockTransport(handler), base_url="http://proxy")
     return Deps(
@@ -110,6 +121,7 @@ def _deps(
         proxy=client,
         headroom=client,
         jaeger=client,
+        orchestrator=client,
         prices=prices or _Prices(),
         series=series or _Series(),
     )
@@ -197,6 +209,23 @@ def test_jaeger_passes_once_the_proxy_reports_in() -> None:
     assert isinstance(result, Passed)
 
 
+def test_the_orchestrator_passes_only_when_it_can_see_every_tool() -> None:
+    """A service that booted without reaching the tool server fails here rather than mid-run."""
+    healthy: Final = {"status": "ok", "tools": len(EXPECTED_TOOLS)}
+    assert isinstance(check_orchestrator(_deps(_json_handler(healthy))), Passed)
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [
+        {"status": "starting", "tools": 0},
+        {"status": "ok", "tools": 3},
+    ],
+)
+def test_the_orchestrator_fails_while_starting_or_half_sighted(payload: Mapping[str, object]) -> None:
+    assert isinstance(check_orchestrator(_deps(_json_handler(payload))), Failed)
+
+
 def test_market_checks_pass_with_data() -> None:
     deps: Final = _deps(_json_handler({}))
     assert isinstance(check_yahoo(deps), Passed)
@@ -210,39 +239,59 @@ def test_market_checks_fail_when_a_provider_returns_nothing() -> None:
     assert isinstance(check_fred(deps), Failed)
 
 
-def test_a_task_group_failure_reports_its_leaf_rather_than_the_wrapper() -> None:
-    """A bare ExceptionGroup message names nothing, which is the mystery the probe exists to end."""
+_REFUSED: Final = "[Errno 111] Connection refused"
+_ALL_FAILED: Final = "All connection attempts failed"
+_CHAINED: Final = f"OSError: {_ALL_FAILED} <- ConnectionRefusedError: {_REFUSED}"
+
+
+def test_an_exception_is_named_with_its_message() -> None:
+    assert describe_failure(ValueError("no such column")) == "ValueError: no such column"
+
+
+def test_an_exception_with_no_message_is_named_on_its_own() -> None:
+    assert describe_failure(TimeoutError()) == "TimeoutError"
+
+
+def test_a_multi_line_message_becomes_one_line() -> None:
+    """The report aligns each verdict against the widest check name, which a newline would break."""
+    described: Final = describe_failure(RuntimeError("driver said:\n  connection reset\n  retrying"))
+    assert described == "RuntimeError: driver said: connection reset retrying"
+
+
+def test_a_long_message_is_capped() -> None:
+    assert describe_failure(ValueError("x" * 500)) == f"ValueError: {'x' * MAX_DETAIL}"
+
+
+def test_a_cause_is_named_after_the_failure_it_explains() -> None:
+    """An "all connection attempts failed" says nothing without the refusal underneath it."""
+    failed: Final = OSError(_ALL_FAILED)
+    failed.__cause__ = ConnectionRefusedError(_REFUSED)
+    assert describe_failure(failed) == _CHAINED
+
+
+def test_an_unchained_cause_is_followed_too() -> None:
+    """A bare raise inside an except block sets __context__ rather than __cause__, and explains as much."""
+    failed: Final = OSError(_ALL_FAILED)
+    failed.__context__ = ConnectionRefusedError(_REFUSED)
+    assert describe_failure(failed) == _CHAINED
+
+
+def test_a_group_names_its_members_rather_than_itself() -> None:
+    """A group's own message counts sub-exceptions without naming one, which explains nothing."""
     group: Final = BaseExceptionGroup("unhandled errors in a TaskGroup", [ConnectionRefusedError("no listener")])
-    described: Final = describe(group)
-    assert "ConnectionRefusedError" in described
-    assert "no listener" in described
-    assert "TaskGroup" not in described
+    assert describe_failure(group) == "ConnectionRefusedError: no listener"
 
 
-def test_a_nested_group_is_flattened_to_its_causes() -> None:
-    inner: Final = BaseExceptionGroup("inner", [ValueError("first"), KeyError("second")])
-    described: Final = describe(BaseExceptionGroup("outer", [inner]))
-    assert "first" in described
-    assert "second" in described
+def test_a_nested_group_reaches_every_member_that_carries_a_message() -> None:
+    inner: Final = BaseExceptionGroup("inner", [ValueError("first"), TimeoutError("second")])
+    described: Final = describe_failure(BaseExceptionGroup("outer", [inner]))
+    assert described == "ValueError: first | TimeoutError: second"
 
 
-def test_many_causes_are_summarised_rather_than_flooding_the_line() -> None:
-    """One line per check keeps the report readable; a group of twenty must not break that."""
+def test_a_group_larger_than_the_cap_says_how_many_it_left_out() -> None:
     group: Final = BaseExceptionGroup("many", [ValueError(f"cause {index}") for index in range(20)])
-    described: Final = describe(group)
-    assert "+17 more" in described
-    assert "\n" not in described
-
-
-def test_a_wrapped_cause_is_named_alongside_its_effect() -> None:
-    """An httpx "All connection attempts failed" says nothing without the refusal underneath it."""
-    refused: Final = ConnectionRefusedError("[Errno 111] Connection refused")
-    failed: Final = OSError("All connection attempts failed")
-    failed.__cause__ = refused
-
-    described: Final = describe(failed)
-    assert "All connection attempts failed" in described
-    assert "ConnectionRefusedError" in described
+    described: Final = describe_failure(group)
+    assert described == ("ValueError: cause 0 | ValueError: cause 1 | ValueError: cause 2 (+17 more)")
 
 
 def test_market_checks_report_the_exception_rather_than_raising() -> None:
@@ -349,6 +398,7 @@ def _refusing_handler(request: httpx.Request) -> httpx.Response:
         check_search,
         check_headroom,
         check_jaeger,
+        check_orchestrator,
     ],
 )
 def test_every_http_check_reports_a_dead_service_rather_than_raising(check: Callable[[Deps], object]) -> None:

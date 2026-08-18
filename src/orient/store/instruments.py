@@ -23,8 +23,7 @@ _UPSERT: Final = SQL("""
         name         = EXCLUDED.name,
         sector       = EXCLUDED.sector,
         exchange     = EXCLUDED.exchange,
-        currency     = EXCLUDED.currency,
-        refreshed_at = now()
+        currency     = EXCLUDED.currency
 """)
 
 

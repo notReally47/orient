@@ -12,16 +12,26 @@ from dataclasses import dataclass
 from typing import Final, Self, cast
 
 from psycopg.sql import Composable
+from psycopg.types.json import Json
+from pydantic import TypeAdapter
 
 from orient.store.pool import Pool
 
 Row = Mapping[str, object]
+
+_ROWS: Final = TypeAdapter(tuple[Row, ...])
+_BOUND: Final = TypeAdapter(dict[str, object])
 
 
 @dataclass(frozen=True, slots=True)
 class Executed:
     text: str
     parameters: object
+
+    @property
+    def bound(self) -> Row:
+        """The named parameters, typed on the way out, since every repository binds by name."""
+        return _BOUND.validate_python(self.parameters)
 
 
 def _render(statement: object) -> str:
@@ -94,3 +104,11 @@ class _Connection:
 def as_pool(fake: FakePool) -> Pool:
     """The repositories take psycopg's concrete pool; the fake matches the slice they use."""
     return cast("Pool", fake)
+
+
+def jsonb_rows(parameter: object) -> tuple[Row, ...]:
+    """What a repository put inside a jsonb wrapper, validated on the way out rather than trusted."""
+    if not isinstance(parameter, Json):
+        message = f"expected a jsonb wrapper, got {type(parameter).__name__}"
+        raise TypeError(message)
+    return _ROWS.validate_python(parameter.obj)  # pyright: ignore[reportAny]  # psycopg types the payload Any

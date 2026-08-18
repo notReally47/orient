@@ -9,7 +9,9 @@ from orient.domain.market import InstrumentMatch
 from orient.providers._untyped import Records, yahoo_lookup, yahoo_screen, yahoo_search
 
 DEFAULT_COUNT: Final = 10
-LOOKUP_KINDS: Final = ("stock", "etf", "index", "future", "currency", "cryptocurrency", "mutualfund")
+LOOKUP_KIND: Final = "all"
+"""Yahoo splits ticker lookup by instrument type. A search that only covered equities would miss
+the index, the currency pair and the crypto pair the tool says it finds."""
 
 _MATCHES: Final = TypeAdapter(tuple[InstrumentMatch, ...])
 
@@ -30,12 +32,6 @@ class YahooDiscovery:
         self._search: Final = search
         self._screen: Final = screen
 
-    def by_ticker(self, query: str, kind: str, count: int = DEFAULT_COUNT) -> tuple[InstrumentMatch, ...]:
-        return _MATCHES.validate_python(_named(self._lookup(query, kind, count)))
-
-    def by_name(self, query: str, count: int = DEFAULT_COUNT) -> tuple[InstrumentMatch, ...]:
-        return _MATCHES.validate_python(_named(self._search(query, count)))
-
     def by_screen(self, key: str, count: int = DEFAULT_COUNT) -> tuple[InstrumentMatch, ...]:
         return _MATCHES.validate_python(_named(self._screen(key, count)))
 
@@ -44,7 +40,14 @@ class YahooDiscovery:
 
         A user who types a ticker wants that instrument at the top; a user who types a company
         wants the name match. Running both and merging means the tool never has to ask which.
+        That Yahoo answers the two from different endpoints is this adapter's business alone.
         """
-        found: Final = (*self.by_ticker(query, "stock", count), *self.by_name(query, count))
+        found: Final = (*self._by_ticker(query, count), *self._by_name(query, count))
         earliest: Final = {match.symbol: match for match in reversed(found)}
         return tuple(earliest[symbol] for symbol in dict.fromkeys(match.symbol for match in found))
+
+    def _by_ticker(self, query: str, count: int) -> tuple[InstrumentMatch, ...]:
+        return _MATCHES.validate_python(_named(self._lookup(query, LOOKUP_KIND, count)))
+
+    def _by_name(self, query: str, count: int) -> tuple[InstrumentMatch, ...]:
+        return _MATCHES.validate_python(_named(self._search(query, count)))

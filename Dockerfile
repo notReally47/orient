@@ -13,9 +13,7 @@ RUN pip install --no-cache-dir .
 RUN useradd --create-home --uid 10001 app
 USER app
 
-EXPOSE 9000
+EXPOSE 8000
 
-# stdio by default so a local MCP client can run the image directly; compose passes the
-# streamable-http arguments, including the host, because the SDK binds loopback otherwise.
-ENTRYPOINT ["python", "-m", "orient.mcp.server"]
+ENTRYPOINT ["orient-mcp"]
 CMD ["--transport", "stdio"]

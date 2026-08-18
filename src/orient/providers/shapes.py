@@ -51,6 +51,22 @@ def describe_index(frame: object) -> str:
     return f"index name={name!r} sample={sample}"
 
 
+def describe_values(frame: object) -> str:
+    """The type of every value in the first record, which a column list cannot show.
+
+    A column whose name is right and whose values are not the declared type is the failure this
+    keeps having to absorb, and pandas infers a column's type per fetch, so the same column is a
+    string one week and a number the next with nothing changed anywhere.
+    """
+    records: Final = cast(
+        "Sequence[Mapping[object, object]]",
+        _invoke(_invoke(frame, "reset_index"), "to_dict", orient="records"),
+    )
+    if not records:
+        return "no rows"
+    return truncate([f"{key}: {type(entry).__name__}" for key, entry in records[0].items()])
+
+
 def describe(value: object) -> str:
     kind: Final = type(value).__name__
 
@@ -60,7 +76,8 @@ def describe(value: object) -> str:
         rows: Final = len(cast("Sequence[object]", _attr(value, "index")))
         column_names: Final = _attr(raw_columns, "names") if hasattr(raw_columns, "names") else None
         return (
-            f"{kind} rows={rows} columns={truncate(columns)} | column names={column_names!r} | {describe_index(value)}"
+            f"{kind} rows={rows} columns={truncate(columns)} | column names={column_names!r}"
+            f" | {describe_index(value)} | values={describe_values(value)}"
         )
 
     if isinstance(value, Mapping):
@@ -92,10 +109,6 @@ def _lookup() -> object:
 def _calendars() -> object:
     start: Final = datetime.now(tz=UTC).date()
     return _invoke(yf, "Calendars", start, start + timedelta(days=7))
-
-
-def _sector() -> object:
-    return _invoke(yf, "Sector", "technology")
 
 
 def _market() -> object:
@@ -200,9 +213,7 @@ def _calendar_probes() -> tuple[Probe, ...]:
 
 def probes() -> tuple[Probe, ...]:
     return (
-        ("Lookup('apple').get_stock", lambda: _invoke(_lookup(), "get_stock", count=5)),
-        ("Lookup('apple').get_etf", lambda: _invoke(_lookup(), "get_etf", count=5)),
-        ("Lookup('apple').all", lambda: _attr(_lookup(), "all")),
+        ("Lookup('apple').get_all", lambda: _invoke(_lookup(), "get_all", count=5)),
         ("Search('apple').quotes", lambda: _attr(_invoke(yf, "Search", "apple", max_results=5), "quotes")),
         ("screen('day_gainers')", lambda: _invoke(yf, "screen", "day_gainers", count=5)),
         ("screen(...)['quotes'][0] keys", _screen_quote_keys),
@@ -215,8 +226,6 @@ def probes() -> tuple[Probe, ...]:
         ("Ticker('SPY').funds_data.sector_weightings", lambda: _attr(_funds_data(), "sector_weightings")),
         ("Market('US').summary", lambda: _attr(_market(), "summary")),
         ("Market('US').status", lambda: _attr(_market(), "status")),
-        ("Sector('technology').overview", lambda: _attr(_sector(), "overview")),
-        ("Sector('technology').top_companies", lambda: _attr(_sector(), "top_companies")),
         ("Ticker('AAPL').options", lambda: _attr(_ticker("AAPL"), "options")),
         ("option_chain(nearest).calls", _option_chain_calls),
         *_earnings_probes(),

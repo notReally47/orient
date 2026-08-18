@@ -6,7 +6,7 @@ whose field says what the list is, and leaves room to add a count or a caveat wi
 the tool's shape.
 """
 
-from orient.domain.market import CalendarEntry, InstrumentMatch, NewsArticle
+from orient.domain.market import InstrumentMatch, NewsArticle
 from orient.domain.models import Bar, Claim, Frozen
 
 
@@ -19,10 +19,6 @@ class PriceHistory(Frozen):
     symbol: str
     period: str
     bars: tuple[Bar, ...] = ()
-
-
-class CalendarEntries(Frozen):
-    entries: tuple[CalendarEntry, ...] = ()
 
 
 class NewsResults(Frozen):

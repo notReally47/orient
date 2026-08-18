@@ -15,6 +15,7 @@ from psycopg.types.json import Json
 
 from orient.domain.models import (
     Annotation,
+    Bar,
     Claim,
     Instrument,
     ModelUsage,
@@ -26,18 +27,24 @@ from orient.domain.models import (
     SummaryKey,
     TrendDistance,
 )
+from orient.store import bars as bars_module
 from orient.store import claims as claims_module
 from orient.store import instruments as instruments_module
 from orient.store import runs as runs_module
 from orient.store import summaries as summaries_module
+from orient.store.bars import BarRepository
 from orient.store.claims import ClaimRepository
 from orient.store.instruments import InstrumentRepository
 from orient.store.runs import RunRepository
 from orient.store.sessions import SessionRepository
 from orient.store.summaries import SummaryRepository
-from tests.store.fakes import FakePool, as_pool
+from tests.store.fakes import FakePool, as_pool, jsonb_rows
 
 _SESSION_DATE: Final = date(2026, 8, 12)
+
+
+def _bar(session_date: date, close: float = 6000.0) -> Bar:
+    return Bar(session_date=session_date, open=close, high=close, low=close, close=close, volume=1_000)
 
 
 def _signals(symbol: str = "^GSPC") -> Signals:
@@ -57,6 +64,7 @@ def _summary(summary_id: UUID) -> Summary:
         session_date=_SESSION_DATE,
         level="beginner",
         status="ok",
+        thesis="The index gave back Monday's gain.",
         sections=(Section(heading="The big picture", body="It rose."),),
         annotations=(Annotation(term="breadth", definition="how many rose versus fell"),),
         signals_snapshot=_signals(),
@@ -108,8 +116,7 @@ async def test_summary_json_columns_are_wrapped_for_jsonb() -> None:
     pool: Final = FakePool()
     await SummaryRepository(as_pool(pool)).add(_summary(uuid4()))
 
-    parameters = pool.only.parameters
-    assert isinstance(parameters, dict)
+    parameters = pool.only.bound
     for column in ("sections", "annotations", "signals_snapshot"):
         assert isinstance(parameters[column], Json)
 
@@ -119,8 +126,7 @@ async def test_sessions_store_the_snapshot_as_json_and_read_only_that_column() -
     pool: Final = FakePool()
     await SessionRepository(as_pool(pool)).upsert(signals)
 
-    parameters = pool.only.parameters
-    assert isinstance(parameters, dict)
+    parameters = pool.only.bound
     assert isinstance(parameters["signals"], Json)
     assert parameters["signals_version"] == signals.version
 
@@ -165,8 +171,7 @@ async def test_a_query_embedding_is_wrapped_for_the_vector_column() -> None:
     pool: Final = FakePool([])
     _ = await ClaimRepository(as_pool(pool)).similar([0.1, 0.2])
 
-    parameters = pool.only.parameters
-    assert isinstance(parameters, dict)
+    parameters = pool.only.bound
     assert isinstance(parameters["embedding"], Vector)
 
 
@@ -184,8 +189,7 @@ async def test_adding_claims_wraps_each_vector_and_flattens_the_symbol_tuple() -
     pool: Final = FakePool()
     await ClaimRepository(as_pool(pool)).add((claim,), ([0.1, 0.2],))
 
-    parameters = pool.only.parameters
-    assert isinstance(parameters, dict)
+    parameters = pool.only.bound
     assert parameters["mentioned_symbols"] == ["GOOGL", "MSFT"]
     assert isinstance(parameters["embedding"], Vector)
 
@@ -203,8 +207,7 @@ async def test_starting_a_run_serialises_both_json_columns() -> None:
     pool: Final = FakePool()
     await RunRepository(as_pool(pool)).start(run)
 
-    parameters = pool.only.parameters
-    assert isinstance(parameters, dict)
+    parameters = pool.only.bound
     assert isinstance(parameters["phase_timings"], Json)
     assert isinstance(parameters["model_usage"], Json)
 
@@ -223,21 +226,63 @@ async def test_open_claims_are_the_unresolved_ones() -> None:
     assert "resolved_by IS NULL" in pool.only.text
 
 
-async def test_finishing_a_run_serialises_its_usage_map() -> None:
+async def test_finishing_a_run_serialises_its_usage_per_phase() -> None:
     run_id: Final = uuid4()
     pool: Final = FakePool()
 
     await RunRepository(as_pool(pool)).finish(
         run_id,
         "ok",
-        {"gather": 1.5},
-        {"primary-model": ModelUsage(calls=2, prompt_tokens=100, completion_tokens=50)},
+        {"gather": 1.5, "write": 2.5},
+        (
+            ModelUsage(phase="gather", model="primary-model", calls=2, prompt_tokens=100, completion_tokens=50),
+            ModelUsage(phase="write", model="primary-model", calls=1, prompt_tokens=900, completion_tokens=400),
+        ),
     )
 
-    parameters = pool.only.parameters
-    assert isinstance(parameters, dict)
-    assert isinstance(parameters["model_usage"], Json)
+    parameters = pool.only.bound
+    assert jsonb_rows(parameters["model_usage"]) == (
+        {"phase": "gather", "model": "primary-model", "calls": 2, "prompt_tokens": 100, "completion_tokens": 50},
+        {"phase": "write", "model": "primary-model", "calls": 1, "prompt_tokens": 900, "completion_tokens": 400},
+    )
     assert parameters["status"] == "ok"
+
+
+async def test_the_bar_projection_is_the_model_minus_the_symbol_it_is_keyed_by() -> None:
+    """The symbol is the query's argument, so selecting it back would break `extra="forbid"`."""
+    assert set(bars_module.COLUMNS) == set(Bar.model_fields)
+
+
+async def test_bars_are_read_back_oldest_first() -> None:
+    """Every window calculation reads the last row as the latest, whether it came from a vendor or here."""
+    pool: Final = FakePool([])
+    _ = await BarRepository(as_pool(pool)).since("^GSPC", _SESSION_DATE)
+
+    assert "ORDER BY session_date" in pool.only.text
+    assert pool.only.parameters == {"symbol": "^GSPC", "since": _SESSION_DATE}
+
+
+async def test_storing_bars_leaves_the_sessions_already_recorded_alone() -> None:
+    """A past session's bar cannot have changed, so a re-fetch must not rewrite what cited it."""
+    pool: Final = FakePool()
+    await BarRepository(as_pool(pool)).add("^GSPC", (_bar(_SESSION_DATE),))
+
+    assert "ON CONFLICT (symbol, session_date) DO NOTHING" in pool.only.text
+    assert pool.only.bound == {"symbol": "^GSPC", **_bar(_SESSION_DATE).model_dump()}
+
+
+async def test_storing_nothing_issues_no_statement_at_all() -> None:
+    pool: Final = FakePool()
+    await BarRepository(as_pool(pool)).add("^GSPC", ())
+
+    assert pool.executed == []
+
+
+async def test_stored_bars_round_trip_back_into_their_model() -> None:
+    bar: Final = _bar(_SESSION_DATE)
+    pool: Final = FakePool([bar.model_dump(mode="json")])
+
+    assert await BarRepository(as_pool(pool)).since("^GSPC", _SESSION_DATE) == (bar,)
 
 
 async def test_an_instrument_round_trips_through_its_projection() -> None:

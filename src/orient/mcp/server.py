@@ -23,16 +23,17 @@ from orient.mcp.tools import discovery, market, reference, research
 from orient.providers.fred import FredProvider
 from orient.providers.yahoo import (
     YahooCalendars,
-    YahooContext,
     YahooDiscovery,
     YahooEarnings,
+    YahooMarket,
     YahooPrices,
     YahooReference,
 )
+from orient.store.bars import BarRepository
 from orient.store.claims import ClaimRepository
 from orient.store.pool import create_pool
 
-SERVER_NAME: Final = "orient"
+SERVER_NAME: Final = "market-summary"
 VERSION: Final = "0.1.0"
 DEFAULT_PORT: Final = 9000
 # The SDK binds loopback unless told otherwise, which is invisible until a container cannot be
@@ -77,7 +78,7 @@ class Options(BaseModel):
 
 
 def parse(argv: list[str]) -> Options:
-    parser: Final = argparse.ArgumentParser(prog="orient-mcp")
+    parser: Final = argparse.ArgumentParser(prog="market-summary-mcp")
     _ = parser.add_argument("--transport", choices=("stdio", "streamable-http"), default="stdio")
     _ = parser.add_argument("--host", default=DEFAULT_HOST)
     _ = parser.add_argument("--port", type=int, default=DEFAULT_PORT)
@@ -101,15 +102,16 @@ def main(argv: list[str] | None = None) -> int:
             _ = await stack.enter_async_context(proxy)
             yield None
 
+    prices: Final = YahooPrices()
     deps: Final = ToolDeps(
-        prices=YahooPrices(),
+        prices=prices,
         discovery=YahooDiscovery(),
         reference=YahooReference(),
         earnings=YahooEarnings(),
-        context=YahooContext(),
+        market=YahooMarket(prices, FredProvider()),
         calendars=YahooCalendars(),
-        series=FredProvider(),
         search=SearchClient(proxy, settings.search_tool_name),
+        bars=BarRepository(pool),
         claims=ClaimRepository(pool),
         embeddings=EmbeddingClient(proxy, settings.embedding_model, settings.embedding_dimensions),
     )

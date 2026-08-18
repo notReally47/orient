@@ -8,9 +8,9 @@ from anyio import to_thread
 from mcp.server import MCPServer
 from pydantic import Field
 
-from orient.domain.market import CalendarKind, EarningsDetail, InstrumentProfile
+from orient.domain.market import EarningsDetail, InstrumentProfile
+from orient.domain.models import Calendar, CalendarKind
 from orient.mcp.deps import ToolDeps
-from orient.mcp.results import CalendarEntries
 
 DEFAULT_CALENDAR_DAYS = 7
 MAX_CALENDAR_DAYS = 60
@@ -19,7 +19,7 @@ MAX_CALENDAR_DAYS = 60
 def register(server: MCPServer, deps: ToolDeps) -> None:
     @server.tool()
     async def get_instrument_profile(
-        symbol: Annotated[str, Field(description="A Yahoo ticker such as 'AAPL' or 'SPY'")],
+        symbol: Annotated[str, Field(description="A ticker such as 'AAPL' or 'SPY'")],
     ) -> InstrumentProfile:
         """What an instrument is: its classification, sector, size and valuation.
 
@@ -61,11 +61,13 @@ def register(server: MCPServer, deps: ToolDeps) -> None:
             tuple[CalendarKind, ...] | None,
             Field(description="Limit to some of earnings, economic, ipo, split. All four when unset"),
         ] = None,
-    ) -> CalendarEntries:
+    ) -> Calendar:
         """What is scheduled in the days ahead, across earnings, economic releases, IPOs and splits.
 
         One list sorted soonest first and tagged by kind, so there is no need to choose a calendar
-        before knowing what is on it.
+        before knowing what is on it. `unreadable` counts rows the vendor sent in a shape this layer
+        could not read: above zero, the list is short and should be described as incomplete rather
+        than as a quiet week.
         """
         start = deps.clock()
         end = start + timedelta(days=days)
@@ -74,6 +76,6 @@ def register(server: MCPServer, deps: ToolDeps) -> None:
             if kinds is None
             else partial(deps.calendars.entries, start, end, kinds)
         )
-        return CalendarEntries(entries=await to_thread.run_sync(fetch))
+        return await to_thread.run_sync(fetch)
 
     _ = (get_instrument_profile, get_earnings_detail, get_calendar)

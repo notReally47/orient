@@ -8,7 +8,7 @@ wire uses, which is the layer most likely to be wrong.
 import json
 from collections.abc import AsyncGenerator, Mapping, Sequence
 from contextlib import asynccontextmanager
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 from typing import Final
 
 import httpx
@@ -20,15 +20,17 @@ from orient.mcp.deps import ToolDeps
 from orient.providers._untyped import Records
 from orient.providers.yahoo import (
     YahooCalendars,
-    YahooContext,
     YahooDiscovery,
     YahooEarnings,
+    YahooMarket,
     YahooPrices,
     YahooReference,
 )
+from orient.store.bars import BarRepository
 from orient.store.claims import ClaimRepository
 from tests.store.fakes import FakePool, as_pool
 
+EASTERN: Final = timezone(timedelta(hours=-4), "EDT")
 TODAY: Final = date(2026, 8, 12)
 DIMENSIONS: Final = 4
 
@@ -161,18 +163,17 @@ def _actions(symbol: str) -> Records:
 
 
 def _status(region: str) -> Mapping[str, object]:
+    """The payload yfinance builds: the bounds parsed into datetimes, the zone nested by its offset."""
     del region
-    return {"name": "US", "status": "closed", "open": "09:30", "close": "16:00", "timezone": "EST"}
-
-
-def _companies(key: str) -> Records:
-    del key
-    return ({"symbol": "NVDA", "name": "NVIDIA", "rating": "Buy", "market_weight": 0.08},)
-
-
-def _overview(key: str) -> Mapping[str, object]:
-    del key
-    return {"market_weight": 0.32, "companies_count": 800}
+    return {
+        "id": "us",
+        "name": "U.S. Markets",
+        "status": "closed",
+        "open": datetime(2026, 8, 12, 9, 30, tzinfo=EASTERN),
+        "close": datetime(2026, 8, 12, 16, 0, tzinfo=EASTERN),
+        "timezone": {"gmtoffset": -14400000, "short": "EDT", "long": "Eastern Daylight Time"},
+        "tz": EASTERN,
+    }
 
 
 def _earnings_calendar(start: date, end: date) -> Records:
@@ -191,8 +192,9 @@ def _ipo_calendar(start: date, end: date) -> Records:
 
 
 def _splits_calendar(start: date, end: date) -> Records:
+    """Yahoo carries the two sides as numbers rather than as a ready-made ratio string."""
     del end
-    return ({"symbol": "OLDCO", "company": "Old Co", "payable_on": start, "share_worth": "2 for 1"},)
+    return ({"symbol": "OLDCO", "company": "Old Co", "payable_on": start, "old_share_worth": 1, "share_worth": 2},)
 
 
 def _prices() -> YahooPrices:
@@ -220,15 +222,16 @@ async def tool_deps(pool: FakePool | None = None) -> AsyncGenerator[ToolDeps, No
     store: Final = pool if pool is not None else FakePool()
     transport: Final = httpx.MockTransport(_proxy_handler)
     async with httpx.AsyncClient(transport=transport, base_url="http://proxy") as client:
+        prices = _prices()
         yield ToolDeps(
-            prices=_prices(),
+            prices=prices,
             discovery=YahooDiscovery(_lookup, _search, _screen),
             reference=YahooReference(_info, _holdings, _weights, _expiries, _calls),
             earnings=YahooEarnings(_earnings_events, _estimates, _trend, _revisions, _targets, _actions),
-            context=YahooContext(_status, _companies, _overview),
+            market=YahooMarket(prices, _Series(), _status, lambda: TODAY),
             calendars=YahooCalendars(_earnings_calendar, _economic_calendar, _ipo_calendar, _splits_calendar),
-            series=_Series(),
             search=SearchClient(client, "exa-search"),
+            bars=BarRepository(as_pool(store)),
             claims=ClaimRepository(as_pool(store)),
             embeddings=EmbeddingClient(client, "embedding-model", DIMENSIONS),
             clock=lambda: TODAY,

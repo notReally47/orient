@@ -1,6 +1,6 @@
 """Run records, which are what make a trace in Jaeger correspond to something queryable."""
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Final
 from uuid import UUID
 
@@ -70,13 +70,13 @@ class RunRepository:
         run_id: UUID,
         status: RunStatus,
         phase_timings: Mapping[str, float],
-        model_usage: Mapping[str, ModelUsage],
+        model_usage: Sequence[ModelUsage],
     ) -> None:
         parameters: Final = {
             "id": run_id,
             "status": status,
             "phase_timings": Json(dict(phase_timings)),
-            "model_usage": Json({name: usage.model_dump() for name, usage in model_usage.items()}),
+            "model_usage": Json([usage.model_dump() for usage in model_usage]),
         }
         async with self._pool.connection() as connection:
             _ = await connection.execute(_FINISH, parameters)

@@ -15,8 +15,8 @@ if TYPE_CHECKING:
     from collections.abc import Mapping
 
 from orient.domain.market import EarningsDetail, InstrumentProfile, MarketContext
-from orient.domain.models import Signals
-from orient.mcp.results import CalendarEntries, InstrumentMatches, KnowledgeResults, NewsResults
+from orient.domain.models import Calendar, Signals
+from orient.mcp.results import InstrumentMatches, KnowledgeResults, NewsResults
 from orient.mcp.server import create_server
 from tests.mcp.fakes import fund_reference, tool_deps
 
@@ -176,7 +176,7 @@ async def test_the_calendar_merges_all_four_sources_soonest_first() -> None:
     async with tool_deps() as deps:
         result = await create_server(deps).call_tool("get_calendar", {"days": 7})
 
-    kinds = [entry.kind for entry in parsed(result, CalendarEntries).entries]
+    kinds = [entry.kind for entry in parsed(result, Calendar).entries]
     assert set(kinds) == {"earnings", "economic", "ipo", "split"}
     assert kinds[-1] == "ipo"
 

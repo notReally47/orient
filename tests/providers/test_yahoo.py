@@ -45,8 +45,9 @@ def test_a_date_passes_through_unchanged() -> None:
     assert provider.daily_bars("^GSPC", "5d")[0].session_date == date(2026, 8, 12)
 
 
-def test_every_bar_is_returned_in_the_order_received() -> None:
-    records: Final = (_record(date(2026, 8, 11), 100.0), _record(date(2026, 8, 12), 101.0))
+def test_bars_come_back_oldest_first_whatever_order_they_arrived_in() -> None:
+    """Every window calculation above reads the last row as the latest, so the order is a guarantee."""
+    records: Final = (_record(date(2026, 8, 12), 101.0), _record(date(2026, 8, 11), 100.0))
     provider: Final = YahooPrices(_fetch(records))
     assert tuple(bar.close for bar in provider.daily_bars("^GSPC", "5d")) == (100.0, 101.0)
 

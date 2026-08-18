@@ -2,15 +2,18 @@
 
 An analyst asks "what is happening this week", not "which of four endpoints holds it", so the
 four frames collapse into one sorted list tagged by kind.
+
+Each row is validated on its own. Validating the batch would let one row Yahoo typed unexpectedly
+cost the other forty-seven, and partial success is a first-class result everywhere else here.
 """
 
 from collections.abc import Callable, Mapping, Sequence
 from datetime import date
 from typing import Final
 
-from pydantic import TypeAdapter
+from pydantic import TypeAdapter, ValidationError
 
-from orient.domain.market import CalendarEntry, CalendarKind
+from orient.domain.models import Calendar, CalendarEntry, CalendarKind
 from orient.providers._untyped import (
     Records,
     yahoo_earnings_calendar,
@@ -21,7 +24,7 @@ from orient.providers._untyped import (
 
 ALL_KINDS: Final[tuple[CalendarKind, ...]] = ("earnings", "economic", "ipo", "split")
 
-_ENTRIES: Final = TypeAdapter(tuple[CalendarEntry, ...])
+_ENTRY: Final = TypeAdapter(CalendarEntry)
 
 Fetch = Callable[[date, date], Records]
 Shape = Callable[[Mapping[str, object]], Mapping[str, object]]
@@ -58,14 +61,27 @@ def _ipo_entry(row: Mapping[str, object]) -> Mapping[str, object]:
     }
 
 
+def _side(value: object) -> str | None:
+    """Yahoo carries each side of a split as a number, and "2.0-for-1.0" is not what a reader reads."""
+    return f"{value:g}" if isinstance(value, int | float) and not isinstance(value, bool) else None
+
+
 def _split_entry(row: Mapping[str, object]) -> Mapping[str, object]:
+    new, old = _side(row.get("share_worth")), _side(row.get("old_share_worth"))
     return {
         "kind": "split",
         "label": row.get("company") or row.get("symbol") or "unknown",
         "symbol": row.get("symbol"),
         "occurs_at": row.get("payable_on"),
-        "detail": row.get("share_worth"),
+        "detail": None if new is None or old is None else f"{new}-for-{old}",
     }
+
+
+def _read(row: Mapping[str, object]) -> CalendarEntry | None:
+    try:
+        return _ENTRY.validate_python(row)
+    except ValidationError:
+        return None
 
 
 class YahooCalendars:
@@ -87,11 +103,15 @@ class YahooCalendars:
         self,
         start: date,
         end: date,
-        kinds: Sequence[CalendarKind] = ALL_KINDS,
-    ) -> tuple[CalendarEntry, ...]:
+        kinds: Sequence[CalendarKind] | None = None,
+    ) -> Calendar:
         """Sorted by date, undated last, so the soonest thing is always first."""
+        wanted: Final = ALL_KINDS if kinds is None else kinds
         rows: Final = tuple(
-            shape(row) for kind in kinds for fetch, shape in (self._sources[kind],) for row in fetch(start, end)
+            shape(row) for kind in wanted for fetch, shape in (self._sources[kind],) for row in fetch(start, end)
         )
-        entries: Final = _ENTRIES.validate_python(rows)
-        return tuple(sorted(entries, key=lambda entry: (entry.occurs_at is None, entry.occurs_at or date.max)))
+        read: Final = tuple(entry for entry in map(_read, rows) if entry is not None)
+        return Calendar(
+            entries=tuple(sorted(read, key=lambda entry: (entry.occurs_at is None, entry.occurs_at or date.max))),
+            unreadable=len(rows) - len(read),
+        )
