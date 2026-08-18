@@ -1,8 +1,58 @@
 model_list:
+  # Gemini's free tier meters per Google Cloud project, not per key, so a second key only adds
+  # throughput when it belongs to a different project. Each role is served by both, with the
+  # second at order: 2. The router sends everything to order: 1 and only reaches for order: 2
+  # once the first is in cooldown, which a 429 triggers immediately.
   - model_name: primary-model
     litellm_params:
-      model: gemini/gemini-3.6-flash
+      model: gemini/gemini-3.5-flash
       api_key: os.environ/GEMINI_API_KEY
+      order: 1
+      cache_control_injection_points:
+        - location: message
+          role: system
+
+  - model_name: primary-model
+    litellm_params:
+      model: gemini/gemini-3.5-flash
+      api_key: os.environ/GEMINI_API_KEY_2
+      order: 2
+      cache_control_injection_points:
+        - location: message
+          role: system
+
+  - model_name: primary-model
+    litellm_params:
+      model: gemini/gemini-3.5-flash
+      api_key: os.environ/GEMINI_API_KEY_3
+      order: 2
+      cache_control_injection_points:
+        - location: message
+          role: system
+
+  - model_name: primary-model
+    litellm_params:
+      model: gemini/gemini-3.5-flash
+      api_key: os.environ/GEMINI_API_KEY_4
+      order: 1
+      cache_control_injection_points:
+        - location: message
+          role: system
+
+  - model_name: primary-model
+    litellm_params:
+      model: gemini/gemini-3.5-flash
+      api_key: os.environ/GEMINI_API_KEY_5
+      order: 2
+      cache_control_injection_points:
+        - location: message
+          role: system
+
+  - model_name: primary-model
+    litellm_params:
+      model: gemini/gemini-3.5-flash
+      api_key: os.environ/GEMINI_API_KEY_6
+      order: 2
       cache_control_injection_points:
         - location: message
           role: system
@@ -11,31 +61,125 @@ model_list:
     litellm_params:
       model: gemini/gemini-3.5-flash-lite
       api_key: os.environ/GEMINI_API_KEY
+      order: 1
+
+  - model_name: fast-model
+    litellm_params:
+      model: gemini/gemini-3.5-flash-lite
+      api_key: os.environ/GEMINI_API_KEY_2
+      order: 2
+
+  - model_name: fast-model
+    litellm_params:
+      model: gemini/gemini-3.5-flash-lite
+      api_key: os.environ/GEMINI_API_KEY_3
+      order: 2
+
+  - model_name: fast-model
+    litellm_params:
+      model: gemini/gemini-3.5-flash-lite
+      api_key: os.environ/GEMINI_API_KEY_4
+      order: 1
+
+  - model_name: fast-model
+    litellm_params:
+      model: gemini/gemini-3.5-flash-lite
+      api_key: os.environ/GEMINI_API_KEY_5
+      order: 2
+
+  - model_name: fast-model
+    litellm_params:
+      model: gemini/gemini-3.5-flash-lite
+      api_key: os.environ/GEMINI_API_KEY_6
+      order: 2
 
   - model_name: judge-model
     litellm_params:
       model: gemini/gemini-3.6-flash
       api_key: os.environ/GEMINI_API_KEY
+      order: 1
+
+  - model_name: judge-model
+    litellm_params:
+      model: gemini/gemini-3.6-flash
+      api_key: os.environ/GEMINI_API_KEY_2
+      order: 2
+
+  - model_name: judge-model
+    litellm_params:
+      model: gemini/gemini-3.6-flash
+      api_key: os.environ/GEMINI_API_KEY_3
+      order: 2
+
+  - model_name: judge-model
+    litellm_params:
+      model: gemini/gemini-3.6-flash
+      api_key: os.environ/GEMINI_API_KEY_4
+      order: 1
+
+  - model_name: judge-model
+    litellm_params:
+      model: gemini/gemini-3.6-flash
+      api_key: os.environ/GEMINI_API_KEY_5
+      order: 2
+
+  - model_name: judge-model
+    litellm_params:
+      model: gemini/gemini-3.6-flash
+      api_key: os.environ/GEMINI_API_KEY_6
+      order: 2
 
   - model_name: embedding-model
     litellm_params:
       model: gemini/gemini-embedding-2
       api_key: os.environ/GEMINI_API_KEY
       dimensions: 1536
+      order: 1
 
-  # Gemini free-tier quota is per Google Cloud project, not per key. Duplicating a
-  # model_name with a key from a SECOND project multiplies throughput; a second key
-  # from the same project does not. Uncomment once GEMINI_API_KEY_2 names another project.
-  # - model_name: fast-model
-  #   litellm_params:
-  #     model: gemini/gemini-3.5-flash-lite
-  #     api_key: os.environ/GEMINI_API_KEY_2
+  - model_name: embedding-model
+    litellm_params:
+      model: gemini/gemini-embedding-2
+      api_key: os.environ/GEMINI_API_KEY_2
+      dimensions: 1536
+      order: 2
+
+  - model_name: embedding-model
+    litellm_params:
+      model: gemini/gemini-embedding-2
+      api_key: os.environ/GEMINI_API_KEY_3
+      dimensions: 1536
+      order: 2
+      
+  - model_name: embedding-model
+    litellm_params:
+      model: gemini/gemini-embedding-2
+      api_key: os.environ/GEMINI_API_KEY_4
+      dimensions: 1536
+      order: 1
+
+  - model_name: embedding-model
+    litellm_params:
+      model: gemini/gemini-embedding-2
+      api_key: os.environ/GEMINI_API_KEY_5
+      dimensions: 1536
+      order: 2
+
+  - model_name: embedding-model
+    litellm_params:
+      model: gemini/gemini-embedding-2
+      api_key: os.environ/GEMINI_API_KEY_6
+      dimensions: 1536
+      order: 2
 
 router_settings:
   routing_strategy: simple-shuffle
   num_retries: 2
   allowed_fails: 3
-  cooldown_time: 30
+  cooldown_time: 60
+  # A single 429 takes the exhausted project out of rotation rather than spending two more
+  # requests proving it. Gemini's window is a minute, so that is how long it stays out.
+  allowed_fails_policy:
+    RateLimitErrorAllowedFails: 0
 
 search_tools:
   - search_tool_name: exa-search
@@ -88,5 +232,12 @@ litellm_settings:
   drop_params: true
   cache: false
 
+mcp_servers:
+  orient:
+    url: "http://mcp:9000/mcp"
+    transport: http
+
 general_settings:
   master_key: os.environ/LITELLM_MASTER_KEY
+  store_model_in_db: true
+  store_prompts_in_spend_logs: true

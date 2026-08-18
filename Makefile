@@ -7,7 +7,7 @@ COMPOSE ?= $(DOCKER) compose
 PKG     := orient
 RUN     := uv run --package $(PKG)
 
-.PHONY: help bootstrap start stop reset rebuild status logs ui migrate probe dump test test-integration lint format typecheck check clean
+.PHONY: help bootstrap image start stop reset rebuild status logs ui jaegar migrate probe dump test test-integration test-run lint format typecheck check clean
 
 help:
 	@grep -E '^[a-z-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-12s %s\n", $$1, $$2}'
@@ -16,11 +16,10 @@ bootstrap: ## Sync the shared workspace venv with orient's dev and gui extras
 	@command -v uv >/dev/null 2>&1 || { echo "uv is not installed. See https://docs.astral.sh/uv/"; exit 1; }
 	uv sync --package $(PKG) --extra dev --extra gui
 
-start: migrate ## Start the container stack and checks if the containers are ready
-	@echo "waiting for mcp to be ready..."
-	@for i in $$(seq 1 60); do \
-		curl -sf http://localhost:9000/mcp >/dev/null 2>&1 && break || sleep 2; \
-	done
+image: ## Build the app image from the working tree. Cached, so a no-op when src/ is unchanged.
+	$(COMPOSE) build
+
+start: image migrate ## Build, start the container stack and check the containers are ready
 	@echo "stack started. run 'make probe' next."
 
 stop: ## Stop the stack, keeping the database volume
@@ -33,9 +32,9 @@ reset: ## Stop the stack and DESTROY the database volume, forcing a clean bootst
 	fi
 	$(COMPOSE) down -v
 
-rebuild: ## Rebuilds the docker image without cache
+rebuild: ## Rebuild the image from scratch. Only for when a cached layer is itself wrong.
 	@if [ -t 0 ]; then \
-		read -p "This should only be called if there's changes to the image. Continue? [y/N] " confirm; \
+		read -p "This discards the layer cache and takes minutes. Continue? [y/N] " confirm; \
 		if [ "$$confirm" != "y" ] && [ "$$confirm" != "Y" ]; then echo "Aborted."; exit 1; fi; \
 	fi
 	$(COMPOSE) build --no-cache
@@ -49,17 +48,29 @@ logs: ## Follow proxy logs
 ui: ## Open the LiteLLM admin UI in your default browser
 	powershell.exe -Command "Start-Process 'http://localhost:4000/ui'"
 
+jaegar:
+	powershell.exe -Command "Start-Process 'http://localhost:16686'"
+
 migrate: ## Start the stack if needed, then apply db/migrations/*.sql in order. Safe to re-run.
-	$(COMPOSE) up -d db litellm headroom jaeger
-	@echo "waiting for litellm to be ready..."
+	$(COMPOSE) up -d db headroom jaeger
+	@echo "waiting for db to accept connections..."
 	@for i in $$(seq 1 60); do \
-		curl -sf http://localhost:4000/health/liveliness >/dev/null 2>&1 && break || sleep 2; \
+		$(COMPOSE) exec -T db pg_isready -U "$${POSTGRES_USER:-market}" >/dev/null 2>&1 && break || sleep 2; \
 	done
 	@for f in db/migrations/*.sql; do \
 		echo "  applying $$(basename $$f)"; \
 		$(COMPOSE) exec -T db sh -c 'psql -v ON_ERROR_STOP=1 -q -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"' < "$$f" || exit 1; \
 	done
 	$(COMPOSE) up -d mcp
+	@echo "waiting for mcp to be ready..."
+	@for i in $$(seq 1 60); do \
+		curl -sf http://localhost:9000/mcp >/dev/null 2>&1 && break || sleep 2; \
+	done
+	$(COMPOSE) up -d litellm orchestrator
+	@echo "waiting for litellm to be ready..."
+	@for i in $$(seq 1 60); do \
+		curl -sf http://localhost:4000/health/liveliness >/dev/null 2>&1 && break || sleep 2; \
+	done
 
 probe: ## Verify every external dependency. Nothing is built on top until this is green.
 	$(RUN) python -m orient.probe
@@ -72,6 +83,9 @@ test: ## Run the offline test suite
 
 test-integration: ## Run the store tests against the live Postgres from `make start`
 	$(RUN) pytest -m integration --no-cov
+
+test-run:
+	curl.exe -N -X POST http://localhost:8000/runs -H 'content-type: application/json' -d '{"symbol":"^GSPC","session_date":"2026-08-13","level":"beginner"}'
 
 lint: ## Read-only lint and format check, identical to CI
 	$(RUN) ruff check .

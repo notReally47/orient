@@ -40,30 +40,6 @@ services:
     ports:
       - "8787:8787"
 
-  litellm:
-    image: ghcr.io/berriai/litellm:v1.96.2
-    depends_on:
-      db:
-        condition: service_healthy
-    command: [ "--config", "/app/config.yaml", "--port", "4000", "--detailed_debug", "--use_v2_migration_resolver" ]
-    environment:
-      DATABASE_URL: postgresql://${POSTGRES_USER:-market}:${POSTGRES_PASSWORD:-market}@db:5432/litellm
-      STORE_MODEL_IN_DB: "True"
-      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:?set LITELLM_MASTER_KEY in .env}
-      LITELLM_SALT_KEY: ${LITELLM_SALT_KEY:?set LITELLM_SALT_KEY in .env}
-      GEMINI_API_KEY: ${GEMINI_API_KEY:?set GEMINI_API_KEY in .env}
-      GEMINI_API_KEY_2: ${GEMINI_API_KEY_2:-}
-      EXA_API_KEY: ${EXA_API_KEY:?set EXA_API_KEY in .env}
-      HEADROOM_API_BASE: http://headroom:8787
-      LITELLM_OTEL_V2: "true"
-      OTEL_EXPORTER: otlp_http
-      OTEL_ENDPOINT: http://jaeger:4318
-      OTEL_SERVICE_NAME: litellm-proxy
-    volumes:
-      - ./proxy/config.yaml:/app/config.yaml:ro,z
-    ports:
-      - "4000:4000"
-
   mcp:
     build: .
     depends_on:
@@ -79,6 +55,62 @@ services:
       MS_SEARCH_TOOL_NAME: ${MS_SEARCH_TOOL_NAME:-exa-search}
     ports:
       - "9000:9000"
+    healthcheck:
+      test: [ "CMD", "python", "-c", "import socket; socket.create_connection(('127.0.0.1', 9000), 2).close()" ]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  litellm:
+    image: ghcr.io/berriai/litellm:v1.96.2
+    depends_on:
+      db:
+        condition: service_healthy
+      mcp:
+        condition: service_healthy
+    command: [ "--config", "/app/config.yaml", "--port", "4000", "--detailed_debug", "--use_v2_migration_resolver" ]
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-market}:${POSTGRES_PASSWORD:-market}@db:5432/litellm
+      LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:?set LITELLM_MASTER_KEY in .env}
+      LITELLM_SALT_KEY: ${LITELLM_SALT_KEY:?set LITELLM_SALT_KEY in .env}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:?set GEMINI_API_KEY in .env}
+      GEMINI_API_KEY_2: ${GEMINI_API_KEY_2:?set GEMINI_API_KEY_2 in .env, from a different Google Cloud project than GEMINI_API_KEY}
+      GEMINI_API_KEY_3: ${GEMINI_API_KEY_3:?set GEMINI_API_KEY_3 in .env, from a third Google Cloud project}
+      EXA_API_KEY: ${EXA_API_KEY:?set EXA_API_KEY in .env}
+      HEADROOM_API_BASE: http://headroom:8787
+      LITELLM_OTEL_V2: "true"
+      OTEL_EXPORTER: otlp_http
+      OTEL_ENDPOINT: http://jaeger:4318
+      OTEL_SERVICE_NAME: litellm-proxy
+    volumes:
+      - ./proxy/config.yaml:/app/config.yaml:ro,z
+    ports:
+      - "4000:4000"
+
+  orchestrator:
+    build: .
+    entrypoint: [ "orient-orchestrator" ]
+    command: [ "--host", "0.0.0.0", "--port", "8000" ]
+    depends_on:
+      db:
+        condition: service_healthy
+      mcp:
+        condition: service_healthy
+    environment:
+      MS_DATABASE_URL: postgresql://${POSTGRES_USER:-market}:${POSTGRES_PASSWORD:-market}@db:5432/${POSTGRES_DB:-orient}
+      MS_PROXY_BASE_URL: http://litellm:4000
+      MS_PROXY_API_KEY: ${LITELLM_MASTER_KEY:?set LITELLM_MASTER_KEY in .env}
+      MS_MCP_URL: http://mcp:9000/mcp
+      MS_OTLP_ENDPOINT: http://jaeger:4318
+      MS_PRIMARY_MODEL: ${MS_PRIMARY_MODEL:-primary-model}
+      MS_FAST_MODEL: ${MS_FAST_MODEL:-fast-model}
+      MS_EMBEDDING_MODEL: ${MS_EMBEDDING_MODEL:-embedding-model}
+      MS_EMBEDDING_DIMENSIONS: ${MS_EMBEDDING_DIMENSIONS:-1536}
+      MS_REQUESTS_PER_MINUTE: ${MS_REQUESTS_PER_MINUTE:-15}
+      MS_GATHER_MAX_ITERATIONS: ${MS_GATHER_MAX_ITERATIONS:-6}
+      MS_REVISE_MAX_ATTEMPTS: ${MS_REVISE_MAX_ATTEMPTS:-2}
+    ports:
+      - "8000:8000"
 
 volumes:
   pgdata:
