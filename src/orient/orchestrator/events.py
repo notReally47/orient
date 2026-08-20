@@ -2,7 +2,7 @@
 
 Every event is a frozen model tagged with a `kind` and threaded through the loop as an injected
 emitter, so a nested step reports progress by returning a value rather than by reaching for a
-logger. A worker whose tool calls were invisible is exactly what made `workflow` undebuggable.
+logger. A step that reports nothing is indistinguishable from a step that hung.
 """
 
 from collections.abc import Awaitable, Callable
@@ -13,7 +13,7 @@ from uuid import UUID
 from pydantic import Field
 from sse_starlette import ServerSentEvent
 
-from orient.domain.models import Frozen, Phase, ReadingLevel, RunStatus, SummaryStatus
+from orient.domain.models import Frozen, ReadingLevel, RunStatus, SummaryStatus
 
 Rejection = Literal["grounding", "judge"]
 
@@ -31,15 +31,36 @@ class CacheHit(Frozen):
     summary_id: UUID
 
 
-class PhaseStarted(Frozen):
-    kind: Literal["phase_started"] = "phase_started"
-    phase: Phase
+class TurnFinished(Frozen):
+    """One model turn: what it cost and which tools it asked for.
 
+    A run's shape is decided by the model, so a turn is the unit a caller can count, and this is
+    the only place spend is visible while the run is still going."""
 
-class PhaseFinished(Frozen):
-    kind: Literal["phase_finished"] = "phase_finished"
-    phase: Phase
+    kind: Literal["turn_finished"] = "turn_finished"
+    turn: int
     seconds: float
+    prompt_tokens: int
+    completion_tokens: int
+    tools: tuple[str, ...] = ()
+
+
+class SkillLoaded(Frozen):
+    """Which tier of which skill the model chose to pay for, so on-demand loading is observable."""
+
+    kind: Literal["skill_loaded"] = "skill_loaded"
+    skill: str
+    tier: Literal["body", "reference"]
+    characters: int
+    path: str | None = None
+
+
+class SummaryRefused(Frozen):
+    """The write boundary turned a draft away. The model sees the same detail and tries again."""
+
+    kind: Literal["summary_refused"] = "summary_refused"
+    reason: str
+    detail: str
 
 
 class ToolStarted(Frozen):
@@ -66,15 +87,6 @@ class SectionReady(Frozen):
     body: str
 
 
-class DraftRejected(Frozen):
-    """Why a draft is being written again, so the caller sees a revise rather than a stall."""
-
-    kind: Literal["draft_rejected"] = "draft_rejected"
-    reason: Rejection
-    detail: str
-    attempt: int
-
-
 class RunFinished(Frozen):
     kind: Literal["run_finished"] = "run_finished"
     status: SummaryStatus
@@ -90,13 +102,13 @@ class RunFailed(Frozen):
 Event = Annotated[
     RunStarted
     | CacheHit
-    | PhaseStarted
-    | PhaseFinished
+    | TurnFinished
+    | SkillLoaded
+    | SummaryRefused
     | ToolStarted
     | ToolFinished
     | ThesisReady
     | SectionReady
-    | DraftRejected
     | RunFinished
     | RunFailed,
     Field(discriminator="kind"),
@@ -104,7 +116,7 @@ Event = Annotated[
 
 Emit = Callable[[Event], Awaitable[None]]
 
-ARGUMENT_PREVIEW: Final = 200
+ARGUMENT_PREVIEW: Final = 600
 
 
 def as_sse(event: Event) -> ServerSentEvent:

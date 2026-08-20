@@ -18,12 +18,7 @@ _SELECT: Final = SQL("SELECT {columns} FROM instruments WHERE symbol = %(symbol)
 _UPSERT: Final = SQL("""
     INSERT INTO instruments (symbol, asset_class, name, sector, exchange, currency)
     VALUES (%(symbol)s, %(asset_class)s, %(name)s, %(sector)s, %(exchange)s, %(currency)s)
-    ON CONFLICT (symbol) DO UPDATE SET
-        asset_class  = EXCLUDED.asset_class,
-        name         = EXCLUDED.name,
-        sector       = EXCLUDED.sector,
-        exchange     = EXCLUDED.exchange,
-        currency     = EXCLUDED.currency
+    ON CONFLICT (symbol) DO NOTHING
 """)
 
 
@@ -32,6 +27,8 @@ class InstrumentRepository:
         self._pool: Final = pool
 
     async def upsert(self, instrument: Instrument) -> None:
+        """Insert-once. Sector and name are mutable at the vendor, and rewriting them would move
+        the reference data an already published summary was written against."""
         async with self._pool.connection() as connection:
             _ = await connection.execute(_UPSERT, instrument.model_dump())
 

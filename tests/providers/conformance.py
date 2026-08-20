@@ -78,12 +78,12 @@ def _yahoo_bar(session_date: date, close: float) -> Mapping[str, object]:
 
 
 def _yahoo_prices(series: Mapping[str, Records]) -> YahooPrices:
-    def fetch_one(symbol: str, period: str) -> Records:
-        del period
+    def fetch_one(symbol: str, start: date, end: date) -> Records:
+        del start, end
         return series.get(symbol, ())
 
-    def fetch_many(symbols: Sequence[str], period: str) -> Mapping[str, Records]:
-        del period
+    def fetch_many(symbols: Sequence[str], start: date, end: date) -> Mapping[str, Records]:
+        del start, end
         return {symbol: series[symbol] for symbol in symbols if symbol in series}
 
     return YahooPrices(fetch_one, fetch_many)
@@ -113,7 +113,7 @@ def _yahoo_mixed_calendar() -> YahooCalendars:
 
 
 class _SilentSeries:
-    def observations(self, series_id: str, start: date, end: date) -> tuple[()]:
+    async def observations(self, series_id: str, start: date, end: date) -> tuple[()]:
         del series_id, start, end
         return ()
 

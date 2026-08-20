@@ -13,13 +13,20 @@ from typing import Final, Literal
 
 import httpx
 from mcp.server import MCPServer
+from openai import AsyncOpenAI
 from pydantic import BaseModel, ConfigDict
 
 from orient.config import Settings
+from orient.llm.chat import ProxyChat
 from orient.llm.embeddings import EmbeddingClient
+from orient.llm.judge import JudgeClient
+from orient.llm.limiter import RateLimiter
+from orient.llm.research import Researcher
 from orient.llm.search import SearchClient
 from orient.mcp.deps import ToolDeps
-from orient.mcp.tools import discovery, market, reference, research
+from orient.mcp.tools import discovery, market, memory, persistence, reference, research, skills
+from orient.orchestrator import telemetry
+from orient.providers.cache import CachedPrices
 from orient.providers.fred import FredProvider
 from orient.providers.yahoo import (
     YahooCalendars,
@@ -29,9 +36,13 @@ from orient.providers.yahoo import (
     YahooPrices,
     YahooReference,
 )
+from orient.skills.loader import Skills
 from orient.store.bars import BarRepository
 from orient.store.claims import ClaimRepository
+from orient.store.instruments import InstrumentRepository
 from orient.store.pool import create_pool
+from orient.store.sessions import SessionRepository
+from orient.store.summaries import SummaryRepository
 
 SERVER_NAME: Final = "market-summary"
 VERSION: Final = "0.1.0"
@@ -53,10 +64,13 @@ constituents, because no constituent list is available. Say sector when describi
 Registrar = Callable[[MCPServer, ToolDeps], None]
 
 REGISTRARS: Final[tuple[Registrar, ...]] = (
+    skills.register,
     discovery.register,
     market.register,
     reference.register,
     research.register,
+    memory.register,
+    persistence.register,
 )
 
 
@@ -92,6 +106,11 @@ def main(argv: list[str] | None = None) -> int:
     pool: Final = create_pool(settings.database_url)
     auth: Final = {"Authorization": f"Bearer {settings.proxy_api_key}"}
     proxy: Final = httpx.AsyncClient(base_url=settings.proxy_base_url, headers=auth, timeout=httpx.Timeout(60.0))
+    openai: Final = AsyncOpenAI(
+        base_url=f"{settings.proxy_base_url}/v1",
+        api_key=settings.proxy_api_key,
+        timeout=settings.request_timeout_seconds,
+    )
 
     @asynccontextmanager
     async def lifespan(server: MCPServer) -> AsyncGenerator[None, None]:
@@ -100,9 +119,12 @@ def main(argv: list[str] | None = None) -> int:
             await pool.open(wait=True)
             _ = stack.push_async_callback(pool.close)
             _ = await stack.enter_async_context(proxy)
+            _ = await stack.enter_async_context(openai)
             yield None
 
-    prices: Final = YahooPrices()
+    bars: Final = BarRepository(pool)
+    prices: Final = CachedPrices(YahooPrices(), bars)
+    chat: Final = ProxyChat(openai, RateLimiter(settings.requests_per_minute), telemetry.outgoing)
     deps: Final = ToolDeps(
         prices=prices,
         discovery=YahooDiscovery(),
@@ -110,10 +132,16 @@ def main(argv: list[str] | None = None) -> int:
         earnings=YahooEarnings(),
         market=YahooMarket(prices, FredProvider()),
         calendars=YahooCalendars(),
-        search=SearchClient(proxy, settings.search_tool_name),
-        bars=BarRepository(pool),
-        claims=ClaimRepository(pool),
+        research=Researcher(SearchClient(proxy, settings.search_tool_name), chat, settings.fast_model),
+        skills=Skills(),
+        chat=chat,
+        fast_model=settings.fast_model,
+        judge=JudgeClient(proxy, settings.judge_guardrail),
         embeddings=EmbeddingClient(proxy, settings.embedding_model, settings.embedding_dimensions),
+        instruments=InstrumentRepository(pool),
+        sessions=SessionRepository(pool),
+        summaries=SummaryRepository(pool),
+        claims=ClaimRepository(pool),
     )
 
     server: Final = MCPServer(

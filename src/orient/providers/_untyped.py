@@ -11,7 +11,7 @@ prints the current names; re-run it when one of these starts returning nulls.
 """
 
 from collections.abc import Mapping, Sequence
-from datetime import date
+from datetime import date, timedelta
 from typing import Final, Protocol, cast
 
 import pandas_datareader.data as web
@@ -21,6 +21,7 @@ Records = Sequence[Mapping[str, object]]
 NestedRecords = Sequence[Mapping[tuple[str, str], object]]
 
 DATE_KEY: Final = ("Date", "")
+_ONE_DAY: Final = timedelta(days=1)
 
 
 class _Frame(Protocol):
@@ -41,11 +42,12 @@ def _records(frame: _Frame) -> Records:
     return frame.reset_index().to_dict(orient="records")
 
 
-def yahoo_daily_bars(symbol: str, period: str) -> Records:
+def yahoo_daily_bars(symbol: str, start: date, end: date) -> Records:
+    """`end` is inclusive here and exclusive in yfinance, so the last session is not dropped."""
     ticker: Final = yf.Ticker(symbol)
     frame: Final = cast(
         "_Frame",
-        ticker.history(period=period),  # pyright: ignore[reportUnknownMemberType]  # no stubs
+        ticker.history(start=start, end=end + _ONE_DAY),  # pyright: ignore[reportUnknownMemberType]  # no stubs
     )
     return tuple(
         {
@@ -60,11 +62,16 @@ def yahoo_daily_bars(symbol: str, period: str) -> Records:
     )
 
 
-def yahoo_multi_bars(symbols: Sequence[str], period: str) -> Mapping[str, Records]:
+def yahoo_multi_bars(symbols: Sequence[str], start: date, end: date) -> Mapping[str, Records]:
     """One download for many symbols. Columns come back as (field, symbol) pairs even for one."""
     frame: Final = cast(
         "_NestedFrame",
-        yf.download(list(symbols), period=period, progress=False),  # pyright: ignore[reportUnknownMemberType]  # no stubs
+        yf.download(  # pyright: ignore[reportUnknownMemberType]  # no stubs
+            list(symbols),
+            start=start,
+            end=end + _ONE_DAY,
+            progress=False,
+        ),
     )
     rows: Final = frame.reset_index().to_dict(orient="records")
     return {

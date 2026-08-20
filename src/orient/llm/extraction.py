@@ -8,7 +8,6 @@ The answer is JSON, and it is validated rather than indexed: an extraction that 
 schema costs the run its annotations, never a malformed row in `claims`.
 """
 
-import json
 from collections.abc import Mapping
 from datetime import date
 from typing import Final
@@ -53,6 +52,3 @@ def parse(text: str) -> Extraction:
     except ValidationError:
         return Extraction()
 
-
-def as_prompt_schema() -> str:
-    return json.dumps(SCHEMA)

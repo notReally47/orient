@@ -1,6 +1,6 @@
 ---
 name: writing
-description: The structure every summary follows and the rules that hold at every reading level
+description: The structure every market summary follows, the rules that hold at every reading level, and how figures are written. Use when turning researched measurements into the summary itself.
 ---
 
 Write markdown, and nothing but the summary. No preamble, no note about what you did, no closing
@@ -24,12 +24,16 @@ movers. A section whose data is missing may be left out entirely, but never left
 
 ## Figures
 
-Every figure you write must be one that was measured and handed to you. Do not compute a new one,
-do not convert between units, and do not carry a number out of a news article. A figure that is
-null was not measurable, which means the window was too short, and null is not zero.
+Every figure you write must be one that was measured and handed to you. Do not compute a new one
+and do not carry a number out of a news article. A figure that is null was not measurable, which
+means the window was too short, and null is not zero.
 
-When a comparison would need a figure you do not have, write the sentence without the figure or
-drop the sentence. A qualitative claim that is true beats a quantitative one that is invented.
+A return, a change or a distance arrives as a fraction and is written as a percentage: 0.0065 is
+"0.65%". A close, a level, a yield or a price is already in its own units and keeps them. "The VIX
+rose by 0.0055" is the first mistaken for the second: it rose 0.55%, to a level of 14.63.
+
+A drawdown of zero means the instrument closed at its highest point of the past year. Write that,
+not the zero.
 
 ## Breadth
 
@@ -46,3 +50,17 @@ say what is now unexplained. Never speculate about why anyone acted.
 
 The last section is what to watch, and it comes from the calendar and from open expectations, not
 from a view about where the price is going.
+
+## Before you start
+
+Read `references/compliance.md`. It is short and it is not optional.
+
+Then read the guide for the reading level you were asked for, exactly one of
+`references/beginner.md`, `references/intermediate.md` or `references/advanced.md`. Both can be
+read in the same turn.
+
+## Finishing
+
+Call `save_summary` with the finished markdown. It parses the four sections, checks every figure
+against what was measured, and refuses prose quoting anything that was not. A refusal names the
+offending figures: fix those and call it again. The summary does not exist until it is accepted.

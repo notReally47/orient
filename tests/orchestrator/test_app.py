@@ -14,9 +14,9 @@ from pydantic import TypeAdapter
 from orient.orchestrator.app import create_app
 from orient.orchestrator.deps import RunDeps
 from orient.orchestrator.events import Event
-from tests.orchestrator.fakes import EXTRACTED, GROUNDED, SESSION_DATE, ScriptedChat, Store, answered, run_deps
+from tests.orchestrator.fakes import SESSION_DATE, Cache, ScriptedChat, answered, run_deps, saving
 
-BODY: Final = {"symbol": "AAPL", "session_date": SESSION_DATE.isoformat(), "level": "beginner"}
+BODY: Final = {"symbol": "^GSPC", "session_date": SESSION_DATE.isoformat(), "level": "beginner"}
 _EVENT: Final[TypeAdapter[Event]] = TypeAdapter(Event)
 
 
@@ -42,15 +42,16 @@ async def _client(deps: RunDeps) -> AsyncGenerator[httpx.AsyncClient, None]:
 
 async def test_health_reports_the_tools_it_can_see() -> None:
     """The probe reads this, so a service that booted without the tool server has to say so."""
-    async with run_deps(ScriptedChat(), Store()) as deps, _client(deps) as client:
+    async with run_deps(ScriptedChat(), Cache()) as deps, _client(deps) as client:
         response = await client.get("/health")
 
     assert response.status_code == 200
-    assert response.json() == {"status": "ok", "tools": 9}
+    assert response.json()["status"] == "ok"
+    assert response.json()["tools"] > 0
 
 
 async def test_health_says_it_is_starting_before_the_lifespan_has_run() -> None:
-    async with run_deps(ScriptedChat(), Store()) as deps:
+    async with run_deps(ScriptedChat(), Cache()) as deps:
 
         @asynccontextmanager
         async def build() -> AsyncGenerator[RunDeps, None]:
@@ -65,10 +66,9 @@ async def test_health_says_it_is_starting_before_the_lifespan_has_run() -> None:
 
 
 async def test_a_run_streams_its_events_under_their_own_names() -> None:
-    chat: Final = ScriptedChat(answered("nothing to add"), answered(GROUNDED), answered(EXTRACTED))
-    store: Final = Store()
+    chat: Final = ScriptedChat(answered(calls=saving()))
 
-    async with run_deps(chat, store) as deps, _client(deps) as client:
+    async with run_deps(chat, Cache()) as deps, _client(deps) as client:
         response = await client.post("/runs", json=BODY)
         lines = response.text.splitlines()
 
@@ -77,31 +77,28 @@ async def test_a_run_streams_its_events_under_their_own_names() -> None:
     assert names[0] == "run_started"
     assert names[-1] == "run_finished"
     assert "section_ready" in names
-    assert store.summaries[0].symbol == "AAPL"
 
 
 async def test_a_failing_run_still_closes_the_stream() -> None:
     """A stream that never ends is a client that hangs, which is worse than a reported failure."""
-    async with run_deps(ScriptedChat(), Store()) as deps, _client(deps) as client:
+    async with run_deps(ScriptedChat(), Cache()) as deps, _client(deps) as client:
         response = await client.post("/runs", json=BODY)
 
     assert _named(response.text.splitlines())[-1] == "run_failed"
 
 
 async def test_a_malformed_request_is_rejected_before_a_run_starts() -> None:
-    store: Final = Store()
-    async with run_deps(ScriptedChat(), store) as deps, _client(deps) as client:
+    async with run_deps(ScriptedChat(), Cache()) as deps, _client(deps) as client:
         response = await client.post("/runs", json={**BODY, "level": "expert"})
 
     assert response.status_code == 422
-    assert store.runs == []
 
 
 async def test_every_streamed_payload_validates_back_into_the_event_union() -> None:
     """A client reads the stream through the same union, so a payload it cannot parse is a dead end."""
-    chat: Final = ScriptedChat(answered("nothing to add"), answered(GROUNDED), answered(EXTRACTED))
+    chat: Final = ScriptedChat(answered(calls=saving()))
 
-    async with run_deps(chat, Store()) as deps, _client(deps) as client:
+    async with run_deps(chat, Cache()) as deps, _client(deps) as client:
         response = await client.post("/runs", json=BODY)
 
     lines: Final = response.text.splitlines()

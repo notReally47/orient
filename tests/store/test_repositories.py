@@ -18,9 +18,7 @@ from orient.domain.models import (
     Bar,
     Claim,
     Instrument,
-    ModelUsage,
     Returns,
-    Run,
     Section,
     Signals,
     Summary,
@@ -30,15 +28,13 @@ from orient.domain.models import (
 from orient.store import bars as bars_module
 from orient.store import claims as claims_module
 from orient.store import instruments as instruments_module
-from orient.store import runs as runs_module
 from orient.store import summaries as summaries_module
 from orient.store.bars import BarRepository
 from orient.store.claims import ClaimRepository
 from orient.store.instruments import InstrumentRepository
-from orient.store.runs import RunRepository
 from orient.store.sessions import SessionRepository
 from orient.store.summaries import SummaryRepository
-from tests.store.fakes import FakePool, as_pool, jsonb_rows
+from tests.store.fakes import FakePool, as_pool
 
 _SESSION_DATE: Final = date(2026, 8, 12)
 
@@ -77,7 +73,6 @@ def _summary(summary_id: UUID) -> Summary:
         (instruments_module.COLUMNS, Instrument),
         (summaries_module.COLUMNS, Summary),
         (claims_module.COLUMNS, Claim),
-        (runs_module.COLUMNS, Run),
     ],
 )
 def test_every_projection_matches_its_model_exactly(columns: tuple[str, ...], model: type[Summary]) -> None:
@@ -147,7 +142,8 @@ async def test_claims_and_embeddings_must_line_up() -> None:
         summary_id=uuid4(),
         subject_symbol="^GSPC",
         session_date=_SESSION_DATE,
-        kind="observation",
+        kind="attribution",
+        attribution="the sector fell with it",
         statement="Breadth was narrow.",
     )
     with pytest.raises(ValueError, match="1 claims and 0 embeddings"):
@@ -182,7 +178,8 @@ async def test_adding_claims_wraps_each_vector_and_flattens_the_symbol_tuple() -
         summary_id=uuid4(),
         subject_symbol="^GSPC",
         session_date=_SESSION_DATE,
-        kind="observation",
+        kind="attribution",
+        attribution="the sector fell with it",
         statement="Breadth was narrow.",
         mentioned_symbols=("GOOGL", "MSFT"),
     )
@@ -202,16 +199,6 @@ async def test_upserting_an_instrument_sends_every_column() -> None:
     assert pool.only.parameters == instrument.model_dump()
 
 
-async def test_starting_a_run_serialises_both_json_columns() -> None:
-    run: Final = Run(id=uuid4(), symbol="^GSPC", session_date=_SESSION_DATE, level="beginner", status="running")
-    pool: Final = FakePool()
-    await RunRepository(as_pool(pool)).start(run)
-
-    parameters = pool.only.bound
-    assert isinstance(parameters["phase_timings"], Json)
-    assert isinstance(parameters["model_usage"], Json)
-
-
 async def test_pinning_targets_a_single_summary_by_id() -> None:
     summary_id: Final = uuid4()
     pool: Final = FakePool()
@@ -226,28 +213,6 @@ async def test_open_claims_are_the_unresolved_ones() -> None:
     assert "resolved_by IS NULL" in pool.only.text
 
 
-async def test_finishing_a_run_serialises_its_usage_per_phase() -> None:
-    run_id: Final = uuid4()
-    pool: Final = FakePool()
-
-    await RunRepository(as_pool(pool)).finish(
-        run_id,
-        "ok",
-        {"gather": 1.5, "write": 2.5},
-        (
-            ModelUsage(phase="gather", model="primary-model", calls=2, prompt_tokens=100, completion_tokens=50),
-            ModelUsage(phase="write", model="primary-model", calls=1, prompt_tokens=900, completion_tokens=400),
-        ),
-    )
-
-    parameters = pool.only.bound
-    assert jsonb_rows(parameters["model_usage"]) == (
-        {"phase": "gather", "model": "primary-model", "calls": 2, "prompt_tokens": 100, "completion_tokens": 50},
-        {"phase": "write", "model": "primary-model", "calls": 1, "prompt_tokens": 900, "completion_tokens": 400},
-    )
-    assert parameters["status"] == "ok"
-
-
 async def test_the_bar_projection_is_the_model_minus_the_symbol_it_is_keyed_by() -> None:
     """The symbol is the query's argument, so selecting it back would break `extra="forbid"`."""
     assert set(bars_module.COLUMNS) == set(Bar.model_fields)
@@ -256,10 +221,10 @@ async def test_the_bar_projection_is_the_model_minus_the_symbol_it_is_keyed_by()
 async def test_bars_are_read_back_oldest_first() -> None:
     """Every window calculation reads the last row as the latest, whether it came from a vendor or here."""
     pool: Final = FakePool([])
-    _ = await BarRepository(as_pool(pool)).since("^GSPC", _SESSION_DATE)
+    _ = await BarRepository(as_pool(pool)).between("^GSPC", _SESSION_DATE, _SESSION_DATE)
 
     assert "ORDER BY session_date" in pool.only.text
-    assert pool.only.parameters == {"symbol": "^GSPC", "since": _SESSION_DATE}
+    assert pool.only.parameters == {"symbol": "^GSPC", "start": _SESSION_DATE, "end": _SESSION_DATE}
 
 
 async def test_storing_bars_leaves_the_sessions_already_recorded_alone() -> None:
@@ -282,7 +247,7 @@ async def test_stored_bars_round_trip_back_into_their_model() -> None:
     bar: Final = _bar(_SESSION_DATE)
     pool: Final = FakePool([bar.model_dump(mode="json")])
 
-    assert await BarRepository(as_pool(pool)).since("^GSPC", _SESSION_DATE) == (bar,)
+    assert await BarRepository(as_pool(pool)).between("^GSPC", _SESSION_DATE, _SESSION_DATE) == (bar,)
 
 
 async def test_an_instrument_round_trips_through_its_projection() -> None:
@@ -294,17 +259,3 @@ async def test_an_instrument_round_trips_through_its_projection() -> None:
 
 async def test_a_missing_instrument_is_none_rather_than_an_error() -> None:
     assert await InstrumentRepository(as_pool(FakePool([]))).get("NOPE") is None
-
-
-async def test_a_run_row_round_trips_back_into_its_model() -> None:
-    run: Final = Run(
-        id=uuid4(),
-        symbol="^GSPC",
-        session_date=_SESSION_DATE,
-        level="advanced",
-        status="running",
-        trace_id="abc123",
-    )
-    pool: Final = FakePool([run.model_dump(mode="json")])
-
-    assert await RunRepository(as_pool(pool)).get(run.id) == run

@@ -1,9 +1,7 @@
 """Finding an instrument to research."""
 
-from functools import partial
 from typing import Annotated
 
-from anyio import to_thread
 from mcp.server import MCPServer
 from pydantic import Field
 
@@ -34,10 +32,10 @@ def register(server: MCPServer, deps: ToolDeps) -> None:
         rather than which instrument someone means.
         """
         if screen:
-            matches = await to_thread.run_sync(partial(deps.discovery.by_screen, screen, limit))
+            matches = await deps.discovery.by_screen(screen, limit)
             return InstrumentMatches(query=screen, matches=matches[:limit])
 
-        matches = await to_thread.run_sync(partial(deps.discovery.anything, query, limit))
+        matches = await deps.discovery.anything(query, limit)
         return InstrumentMatches(query=query, matches=matches[:limit])
 
     _ = discover_instruments

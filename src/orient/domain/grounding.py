@@ -10,8 +10,8 @@ absolute value, since prose writes "fell 0.8%" for a signal of -0.008.
 News is deliberately not evidence. An article's figures reached the prompt but nobody here
 measured them, and the tool that returned them says as much, so quoting one fails this check.
 
-The verdict is a value the loop acts on. A guardrail that finds violations and returns the
-response unchanged is the exact bug this replaces.
+The verdict is a value the caller acts on. A check that finds a violation and returns the prose
+unchanged would be worse than no check, because it reads like a guarantee and is not one.
 """
 
 import re
@@ -25,8 +25,9 @@ MAX_REPORTED: Final = 10
 # A fraction quoted as a percent, and a large figure quoted in thousands through trillions.
 SCALES: Final = (1.0, 100.0, 1e-3, 1e-6, 1e-9, 1e-12)
 
-# Window lengths the skills name, which are structure rather than measurement.
-WINDOWS: Final = frozenset({1.0, 2.0, 5.0, 10.0, 20.0, 50.0, 52.0, 200.0, 252.0})
+# Window lengths the skills name, plus the counts prose uses to describe them: twelve months
+# is a year, and a hundred is how a fraction becomes a percentage. Structure, not measurement.
+WINDOWS: Final = frozenset({1.0, 2.0, 5.0, 10.0, 12.0, 20.0, 50.0, 52.0, 100.0, 200.0, 252.0})
 
 _NUMERAL: Final = re.compile(r"\d[\d,]*(?:\.\d+)?")
 _SAFETY: Final = 1e-9

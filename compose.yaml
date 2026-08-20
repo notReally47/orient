@@ -53,6 +53,7 @@ services:
       MS_EMBEDDING_MODEL: ${MS_EMBEDDING_MODEL:-embedding-model}
       MS_EMBEDDING_DIMENSIONS: ${MS_EMBEDDING_DIMENSIONS:-1536}
       MS_SEARCH_TOOL_NAME: ${MS_SEARCH_TOOL_NAME:-exa-search}
+      MS_FAST_MODEL: ${MS_FAST_MODEL:-fast-model}
     ports:
       - "9000:9000"
     healthcheck:
@@ -73,9 +74,14 @@ services:
       DATABASE_URL: postgresql://${POSTGRES_USER:-market}:${POSTGRES_PASSWORD:-market}@db:5432/litellm
       LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:?set LITELLM_MASTER_KEY in .env}
       LITELLM_SALT_KEY: ${LITELLM_SALT_KEY:?set LITELLM_SALT_KEY in .env}
+      # The free tier meters 20 requests per day per project per model, so each key must
+      # belong to its own Google Cloud project to add anything.
       GEMINI_API_KEY: ${GEMINI_API_KEY:?set GEMINI_API_KEY in .env}
-      GEMINI_API_KEY_2: ${GEMINI_API_KEY_2:?set GEMINI_API_KEY_2 in .env, from a different Google Cloud project than GEMINI_API_KEY}
-      GEMINI_API_KEY_3: ${GEMINI_API_KEY_3:?set GEMINI_API_KEY_3 in .env, from a third Google Cloud project}
+      GEMINI_API_KEY_2: ${GEMINI_API_KEY_2:?set GEMINI_API_KEY_2 in .env}
+      GEMINI_API_KEY_3: ${GEMINI_API_KEY_3:?set GEMINI_API_KEY_3 in .env}
+      GEMINI_API_KEY_4: ${GEMINI_API_KEY_4:?set GEMINI_API_KEY_4 in .env}
+      GEMINI_API_KEY_5: ${GEMINI_API_KEY_5:?set GEMINI_API_KEY_5 in .env}
+      GEMINI_API_KEY_6: ${GEMINI_API_KEY_6:?set GEMINI_API_KEY_6 in .env}
       EXA_API_KEY: ${EXA_API_KEY:?set EXA_API_KEY in .env}
       HEADROOM_API_BASE: http://headroom:8787
       LITELLM_OTEL_V2: "true"
@@ -104,6 +110,7 @@ services:
       MS_OTLP_ENDPOINT: http://jaeger:4318
       MS_PRIMARY_MODEL: ${MS_PRIMARY_MODEL:-primary-model}
       MS_FAST_MODEL: ${MS_FAST_MODEL:-fast-model}
+      MS_GATHER_MODEL: ${MS_GATHER_MODEL:-primary-model}
       MS_EMBEDDING_MODEL: ${MS_EMBEDDING_MODEL:-embedding-model}
       MS_EMBEDDING_DIMENSIONS: ${MS_EMBEDDING_DIMENSIONS:-1536}
       MS_REQUESTS_PER_MINUTE: ${MS_REQUESTS_PER_MINUTE:-15}

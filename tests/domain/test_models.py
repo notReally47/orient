@@ -87,6 +87,32 @@ def test_an_expectation_without_a_target_date_is_rejected() -> None:
         _ = _claim("expectation", None)
 
 
-@pytest.mark.parametrize("kind", ["observation", "anomaly"])
+@pytest.mark.parametrize("kind", ["attribution", "anomaly"])
 def test_other_claim_kinds_need_no_target_date(kind: ClaimKind) -> None:
     assert _claim(kind, None).target_date is None
+
+
+def test_a_derived_rate_is_rounded_to_two_decimals_of_a_percentage() -> None:
+    """A sixteen digit float is four digits of fact and twelve of arithmetic noise, and the
+    writer copies whatever it is handed straight into the prose."""
+    returns: Final = Returns(one_day=0.0065161301380911585, year_to_date=0.13928715716529116)
+
+    assert returns.one_day == 0.0065
+    assert returns.year_to_date == 0.1393
+
+
+def test_a_level_is_rounded_the_way_a_venue_quotes_it() -> None:
+    signals: Final = Signals(
+        symbol="^GSPC",
+        session_date=date(2026, 8, 13),
+        close=7798.990234375,
+        returns=Returns(),
+        trend=TrendDistance(),
+    )
+
+    assert signals.close == 7798.99
+
+
+def test_the_curve_spread_is_rounded_rather_than_carrying_float_error() -> None:
+    """4.63 minus 4.15 is 0.48, and 0.47999999999999954 is the same number spelled unusably."""
+    assert CrossAsset(yield_10y=4.63, yield_2y=4.15).spread_10s2s == 0.48

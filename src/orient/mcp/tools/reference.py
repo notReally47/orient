@@ -1,10 +1,8 @@
 """What an instrument is, what analysts expect of it, and what is scheduled."""
 
-from datetime import timedelta
-from functools import partial
+from datetime import date, timedelta
 from typing import Annotated
 
-from anyio import to_thread
 from mcp.server import MCPServer
 from pydantic import Field
 
@@ -27,7 +25,7 @@ def register(server: MCPServer, deps: ToolDeps) -> None:
         sector weights while an equity comes back with its fundamentals. Fields a vendor does not
         publish for a given class are null rather than missing.
         """
-        return await to_thread.run_sync(partial(deps.reference.profile, symbol))
+        return await deps.reference.profile(symbol)
 
     @server.tool()
     async def get_earnings_detail(
@@ -44,15 +42,19 @@ def register(server: MCPServer, deps: ToolDeps) -> None:
         current price adds one implied-move figure from the nearest expiry, which is all this
         should ever say about options.
         """
-        detail = await to_thread.run_sync(partial(deps.earnings.detail, symbol))
+        detail = await deps.earnings.detail(symbol)
         if spot is None or spot <= 0:
             return detail
 
-        move = await to_thread.run_sync(partial(deps.reference.implied_move, symbol, spot, deps.clock()))
+        move = await deps.reference.implied_move(symbol, spot, deps.clock())
         return detail.model_copy(update={"implied_move": move})
 
     @server.tool()
     async def get_calendar(
+        session_date: Annotated[
+            date,
+            Field(description="The session being summarised. The window runs forward from it"),
+        ],
         days: Annotated[
             int,
             Field(description="How far ahead to look", ge=1, le=MAX_CALENDAR_DAYS),
@@ -69,13 +71,9 @@ def register(server: MCPServer, deps: ToolDeps) -> None:
         could not read: above zero, the list is short and should be described as incomplete rather
         than as a quiet week.
         """
-        start = deps.clock()
-        end = start + timedelta(days=days)
-        fetch = (
-            partial(deps.calendars.entries, start, end)
-            if kinds is None
-            else partial(deps.calendars.entries, start, end, kinds)
-        )
-        return await to_thread.run_sync(fetch)
+        end = session_date + timedelta(days=days)
+        if kinds is None:
+            return await deps.calendars.entries(session_date, end)
+        return await deps.calendars.entries(session_date, end, kinds)
 
     _ = (get_instrument_profile, get_earnings_detail, get_calendar)

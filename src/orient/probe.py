@@ -9,6 +9,7 @@ check takes its clients as arguments, so the suite exercises them without a netw
 
 import asyncio
 import sys
+from collections import Counter
 from collections.abc import Callable, Sized
 from contextlib import ExitStack
 from dataclasses import dataclass
@@ -26,12 +27,14 @@ from orient.providers.protocols import Prices, Series
 from orient.providers.yahoo import YahooPrices
 
 TIMEOUT: Final = httpx.Timeout(30.0)
-REQUIRED_GUARDRAILS: Final = frozenset({"headroom-compression", "quality-judge"})
-EXPECTED_TABLES: Final = frozenset({"instruments", "sessions", "summaries", "claims", "runs"})
+REQUIRED_GUARDRAILS: Final = frozenset({"headroom-compression", "quality-judge", "tool-permission-guardrail"})
+EXPECTED_TABLES: Final = frozenset({"instruments", "bars", "sessions", "summaries", "claims"})
 PROXY_SERVICE_NAME: Final = "litellm-proxy"
 LITELLM_TABLE_PREFIX: Final = "LiteLLM_"
 EXPECTED_TOOLS: Final = frozenset(
     {
+        "activate_skill",
+        "read_skill_resource",
         "discover_instruments",
         "get_price_history",
         "compute_instrument_signals",
@@ -40,7 +43,9 @@ EXPECTED_TOOLS: Final = frozenset(
         "get_earnings_detail",
         "get_calendar",
         "search_news",
+        "recall_history",
         "search_knowledge",
+        "save_summary",
     }
 )
 
@@ -92,6 +97,14 @@ class ModelEntry(_Lenient):
 
 class ModelsResponse(_Lenient):
     data: list[ModelEntry] = []
+
+
+class DeploymentEntry(_Lenient):
+    model_name: str
+
+
+class DeploymentsResponse(_Lenient):
+    data: list[DeploymentEntry] = []
 
 
 class ChatChoice(_Lenient):
@@ -246,6 +259,30 @@ def check_proxy_models(deps: Deps) -> CheckResult:
     if missing:
         return Failed(name, f"missing from model_list: {missing}")
     return Passed(name, f"all four roles served: {', '.join(wanted)}")
+
+
+def check_proxy_deployments(deps: Deps) -> CheckResult:
+    """A role backed by six keys and a role backed by one look identical on /v1/models. Only the
+    per-deployment view shows a key that was referenced in config and never passed to the
+    container, which is otherwise invisible until the run that needed it fails."""
+    name: Final = "litellm deployments"
+    try:
+        response = deps.proxy.get("/v1/model/info")
+        if not response.is_success:
+            return Failed(name, f"HTTP {response.status_code}: {response.text[:160]}")
+        payload = DeploymentsResponse.model_validate_json(response.content)
+    except (httpx.HTTPError, ValidationError) as exc:
+        return Failed(name, describe_failure(exc))
+
+    counted: Final = Counter(entry.model_name for entry in payload.data)
+    if not counted:
+        return Failed(name, "the proxy reports no deployments at all")
+    spread: Final = ", ".join(f"{role} x{count}" for role, count in sorted(counted.items()))
+    thin: Final = sorted(role for role, count in counted.items() if count < min(counted.values()) or count == 1)
+    if len(set(counted.values())) > 1:
+        return Failed(name, f"uneven fan-out, so one role runs out first: {spread}")
+    del thin
+    return Passed(name, spread)
 
 
 def check_guardrails(deps: Deps) -> CheckResult:
@@ -425,8 +462,9 @@ def check_orchestrator(deps: Deps) -> CheckResult:
 
 def check_yahoo(deps: Deps) -> CheckResult:
     name: Final = "yahoo finance (yfinance)"
+    end: Final = datetime.now(tz=UTC).date()
     try:
-        bars = deps.prices.daily_bars("^GSPC", "5d")
+        bars = asyncio.run(deps.prices.bars("^GSPC", end - timedelta(days=7), end))
     except Exception as exc:  # noqa: BLE001  # a probe reports every failure rather than propagating one
         return Failed(name, describe_failure(exc))
 
@@ -439,7 +477,7 @@ def check_fred(deps: Deps) -> CheckResult:
     name: Final = "FRED (pandas-datareader)"
     end: Final = datetime.now(tz=UTC).date()
     try:
-        observations = deps.series.observations("DGS10", end - timedelta(days=30), end)
+        observations = asyncio.run(deps.series.observations("DGS10", end - timedelta(days=30), end))
     except Exception as exc:  # noqa: BLE001  # a probe reports every failure rather than propagating one
         return Failed(name, describe_failure(exc))
 
@@ -453,6 +491,7 @@ CHECKS: Final[tuple[Check, ...]] = (
     check_proxy_key,
     check_proxy_health,
     check_proxy_models,
+    check_proxy_deployments,
     check_guardrails,
     check_chat_completion,
     check_embeddings,

@@ -11,20 +11,21 @@ from datetime import date, datetime
 from typing import Annotated, Final, Literal, Self, cast
 from uuid import UUID
 
-from pydantic import BaseModel, BeforeValidator, ConfigDict, model_validator
+from pydantic import AfterValidator, BaseModel, BeforeValidator, ConfigDict, model_validator
 
 AssetClass = Literal["equity", "etf", "index", "future", "currency", "crypto", "fund"]
 ReadingLevel = Literal["beginner", "intermediate", "advanced"]
-ClaimKind = Literal["observation", "expectation", "anomaly"]
+ClaimKind = Literal["attribution", "expectation", "anomaly"]
 ClaimResolution = Literal["supported", "contradicted", "unresolved"]
 SummaryStatus = Literal["ok", "caveated"]
 RunStatus = Literal["running", "ok", "caveated", "failed", "cancelled"]
 CalendarKind = Literal["earnings", "economic", "ipo", "split"]
-Phase = Literal["cache", "recall", "prefetch", "gather", "write", "check", "extract", "persist"]
 
 SIGNALS_VERSION: Final = "1"
 SKILL_VERSION: Final = "1"
 CONTRIBUTOR_COUNT: Final = 3
+RATE_PLACES: Final = 4
+LEVEL_PLACES: Final = 2
 
 
 class Frozen(BaseModel):
@@ -37,6 +38,29 @@ def _drop_time(value: object) -> object:
 
 
 CalendarDate = Annotated[date, BeforeValidator(_drop_time)]
+
+
+def _to_rate(value: float) -> float:
+    return round(value, RATE_PLACES)
+
+
+def _to_level(value: float) -> float:
+    return round(value, LEVEL_PLACES)
+
+
+Rate = Annotated[float, AfterValidator(_to_rate)]
+"""A fraction: 0.0065 is 0.65 percent.
+
+Rounded here rather than by whoever renders it, because a derived figure carries the precision of
+the calculation and not of the measurement. A float that arrives as 0.0065161301380911585 is
+sixteen digits of arithmetic noise attached to four digits of fact, and the layers below cannot
+tell the difference: the writer copies it verbatim into prose, the grounding check accepts it
+because it matches, and the stored snapshot keeps it forever. Four places is two decimals of a
+percentage, which is the finest thing any of these summaries has cause to say.
+"""
+
+Level = Annotated[float, AfterValidator(_to_level)]
+"""A price, an index level or a yield, at the two places every venue quotes them to."""
 
 
 class Bar(Frozen):
@@ -63,23 +87,23 @@ class Instrument(Frozen):
 
 
 class Returns(Frozen):
-    one_day: float | None = None
-    one_week: float | None = None
-    one_month: float | None = None
-    three_month: float | None = None
-    year_to_date: float | None = None
+    one_day: Rate | None = None
+    one_week: Rate | None = None
+    one_month: Rate | None = None
+    three_month: Rate | None = None
+    year_to_date: Rate | None = None
 
 
 class TrendDistance(Frozen):
     """Close relative to its moving averages, as a fraction: 0.03 is three percent above."""
 
-    from_50_day: float | None = None
-    from_200_day: float | None = None
+    from_50_day: Rate | None = None
+    from_200_day: Rate | None = None
 
 
 class Contributor(Frozen):
     symbol: str
-    contribution: float
+    contribution: Rate
 
 
 def _counted(value: object) -> int:
@@ -132,15 +156,15 @@ def _number(value: object) -> float | None:
 
 
 class CrossAsset(Frozen):
-    vix: float | None = None
-    vix_change: float | None = None
-    yield_10y: float | None = None
-    yield_2y: float | None = None
-    high_yield_spread: float | None = None
-    dollar_index: float | None = None
-    crude_oil: float | None = None
-    gold: float | None = None
-    spread_10s2s: float | None = None
+    vix: Level | None = None
+    vix_change: Rate | None = None
+    yield_10y: Level | None = None
+    yield_2y: Level | None = None
+    high_yield_spread: Level | None = None
+    dollar_index: Level | None = None
+    crude_oil: Level | None = None
+    gold: Level | None = None
+    spread_10s2s: Level | None = None
 
     @model_validator(mode="before")
     @classmethod
@@ -161,12 +185,12 @@ class CrossAsset(Frozen):
 class Signals(Frozen):
     symbol: str
     session_date: date
-    close: float
+    close: Level
     returns: Returns
     trend: TrendDistance
-    realised_volatility_20d: float | None = None
-    volume_vs_20_day: float | None = None
-    drawdown_from_52_week_high: float | None = None
+    realised_volatility_20d: Rate | None = None
+    volume_vs_20_day: Rate | None = None
+    drawdown_from_52_week_high: Rate | None = None
     breadth: Breadth | None = None
     cross_asset: CrossAsset | None = None
     version: str = SIGNALS_VERSION
@@ -205,25 +229,6 @@ class Calendar(Frozen):
     unreadable: int = 0
 
 
-class ModelUsage(Frozen):
-    """What one phase spent on one model, so a run says where its tokens went, not only how many."""
-
-    phase: Phase
-    model: str
-    calls: int = 0
-    prompt_tokens: int = 0
-    completion_tokens: int = 0
-
-    def plus(self, other: "ModelUsage") -> "ModelUsage":
-        return ModelUsage(
-            phase=self.phase,
-            model=self.model,
-            calls=self.calls + other.calls,
-            prompt_tokens=self.prompt_tokens + other.prompt_tokens,
-            completion_tokens=self.completion_tokens + other.completion_tokens,
-        )
-
-
 @dataclass(frozen=True, slots=True)
 class SummaryKey:
     """Every field that reaches the prompt. A summary served for one key was written for it."""
@@ -249,7 +254,7 @@ class Summary(Frozen):
     signals_version: str = SIGNALS_VERSION
     skill_version: str = SKILL_VERSION
     pinned: bool = False
-    run_id: UUID | None = None
+    trace_id: str | None = None
     created_at: datetime | None = None
 
     @property
@@ -283,16 +288,3 @@ class Claim(Frozen):
             message = "an expectation claim must carry a target_date"
             raise ValueError(message)
         return self
-
-
-class Run(Frozen):
-    id: UUID
-    symbol: str
-    session_date: date
-    level: ReadingLevel
-    status: RunStatus
-    trace_id: str | None = None
-    phase_timings: Mapping[str, float] = {}
-    model_usage: tuple[ModelUsage, ...] = ()
-    started_at: datetime | None = None
-    finished_at: datetime | None = None

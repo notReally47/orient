@@ -15,13 +15,21 @@ DEFAULT_RESULTS: Final = 5
 
 
 class _Result(BaseModel):
-    model_config = ConfigDict(extra="ignore")
+    """`published` is read from either spelling: the proxy's search tool answers `date`, Exa's
+    own API answers `publishedDate`, and reading only one silently drops every date."""
+
+    model_config = ConfigDict(extra="ignore", populate_by_name=True)
 
     title: str = ""
     url: str = ""
+    date: str | None = None
     published_date: str | None = Field(default=None, alias="publishedDate")
     text: str | None = None
     snippet: str | None = None
+
+    @property
+    def published(self) -> str | None:
+        return self.date or self.published_date
 
 
 class _Payload(BaseModel):
@@ -59,7 +67,7 @@ class SearchClient:
             NewsArticle(
                 title=entry.title,
                 url=entry.url,
-                published=entry.published_date,
+                published=entry.published,
                 snippet=_snippet(entry),
             )
             for entry in payload.entries
@@ -67,10 +75,11 @@ class SearchClient:
         )
 
 
-SNIPPET_LENGTH: Final = 600
+SNIPPET_LENGTH: Final = 1200
 
 
 def _snippet(entry: _Result) -> str | None:
-    """Article bodies run to thousands of words; only the opening reaches a prompt."""
+    """Article bodies run to thousands of words. Only the opening travels, and it goes to the
+    fast model to be read rather than to the writer, so it can afford to be longer than a quote."""
     body: Final = entry.snippet or entry.text
     return None if body is None else body[:SNIPPET_LENGTH]

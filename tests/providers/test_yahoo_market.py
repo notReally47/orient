@@ -43,12 +43,12 @@ class _Prices:
         self._series: Final = series
         self.asked: Final[list[tuple[str, ...]]] = []
 
-    def daily_bars(self, symbol: str, period: str) -> tuple[Bar, ...]:
-        del period
+    async def bars(self, symbol: str, start: date, end: date) -> tuple[Bar, ...]:
+        del start, end
         return self._series.get(symbol, ())
 
-    def multi_bars(self, symbols: Sequence[str], period: str) -> Mapping[str, tuple[Bar, ...]]:
-        del period
+    async def multi_bars(self, symbols: Sequence[str], start: date, end: date) -> Mapping[str, tuple[Bar, ...]]:
+        del start, end
         self.asked.append(tuple(symbols))
         return {symbol: self._series[symbol] for symbol in symbols if symbol in self._series}
 
@@ -57,7 +57,7 @@ class _Series:
     def __init__(self, values: Mapping[str, float]) -> None:
         self._values: Final = values
 
-    def observations(self, series_id: str, start: date, end: date) -> tuple[Observation, ...]:
+    async def observations(self, series_id: str, start: date, end: date) -> tuple[Observation, ...]:
         del start, end
         value: Final = self._values.get(series_id)
         return () if value is None else (Observation(observation_date=TODAY, value=value),)
@@ -71,18 +71,18 @@ def _market(
     return YahooMarket(_Prices(series), _Series(rates), lambda _: status, lambda: TODAY)
 
 
-def test_the_session_bounds_come_back_as_the_moments_yahoo_parsed() -> None:
+async def test_the_session_bounds_come_back_as_the_moments_yahoo_parsed() -> None:
     """They arrive as datetimes, so a model declaring them strings would reject the live payload."""
-    session: Final = _market().backdrop().session
+    session: Final = (await _market().backdrop(TODAY)).session
 
     assert session is not None
     assert session.opens_at == datetime(2026, 8, 12, 9, 30, tzinfo=EASTERN)
     assert session.closes_at == datetime(2026, 8, 12, 16, 0, tzinfo=EASTERN)
 
 
-def test_the_zone_is_unwrapped_from_the_object_it_arrives_inside() -> None:
+async def test_the_zone_is_unwrapped_from_the_object_it_arrives_inside() -> None:
     """Yahoo nests the zone beside its offset; passing the object up would fail validation."""
-    session: Final = _market().backdrop().session
+    session: Final = (await _market().backdrop(TODAY)).session
 
     assert session is not None
     assert session.timezone == "EDT"
@@ -90,36 +90,36 @@ def test_the_zone_is_unwrapped_from_the_object_it_arrives_inside() -> None:
     assert session.name == "U.S. Markets"
 
 
-def test_a_region_yahoo_will_not_serve_is_an_empty_session_rather_than_a_failure() -> None:
+async def test_a_region_yahoo_will_not_serve_is_an_empty_session_rather_than_a_failure() -> None:
     """yfinance answers None both for an unserved region and for a parse failure in one it serves."""
-    session: Final = _market(status=None).backdrop().session
+    session: Final = (await _market(status=None).backdrop(TODAY)).session
 
     assert session is not None
     assert session.status is None
     assert session.opens_at is None
 
 
-def test_the_whole_backdrop_is_fetched_in_one_request() -> None:
+async def test_the_whole_backdrop_is_fetched_in_one_request() -> None:
     """At fifteen requests a minute, three round trips for one bundle is the cost that matters."""
     prices: Final = _Prices({})
-    _ = YahooMarket(prices, _Series({}), lambda _: STATUS, lambda: TODAY).backdrop()
+    _ = await YahooMarket(prices, _Series({}), lambda _: STATUS, lambda: TODAY).backdrop(TODAY)
 
     assert len(prices.asked) == 1
     assert set(SECTOR_ETFS) <= set(prices.asked[0])
     assert "^VIX" in prices.asked[0]
 
 
-def test_the_volatility_index_carries_its_level_and_its_change() -> None:
-    cross: Final = _market({"^VIX": _bars(16.0, 18.0)}).backdrop().cross_asset
+async def test_the_volatility_index_carries_its_level_and_its_change() -> None:
+    cross: Final = (await _market({"^VIX": _bars(16.0, 18.0)}).backdrop(TODAY)).cross_asset
 
     assert cross.vix == 18.0
     assert cross.vix_change is not None
     assert round(cross.vix_change, 4) == 0.125
 
 
-def test_the_yields_come_from_the_series_source_and_the_spread_is_their_difference() -> None:
+async def test_the_yields_come_from_the_series_source_and_the_spread_is_their_difference() -> None:
     """Yahoo publishes no two year index, so the rates come from elsewhere and nothing above knows."""
-    cross: Final = _market(rates={"DGS10": 4.2, "DGS2": 3.7}).backdrop().cross_asset
+    cross: Final = (await _market(rates={"DGS10": 4.2, "DGS2": 3.7}).backdrop(TODAY)).cross_asset
 
     assert cross.yield_10y == 4.2
     assert cross.yield_2y == 3.7
@@ -127,41 +127,41 @@ def test_the_yields_come_from_the_series_source_and_the_spread_is_their_differen
     assert round(cross.spread_10s2s, 4) == 0.5
 
 
-def test_sectors_come_back_strongest_first_with_the_unpriced_ones_last() -> None:
+async def test_sectors_come_back_strongest_first_with_the_unpriced_ones_last() -> None:
     market: Final = _market({"XLK": _bars(100.0, 102.0), "XLE": _bars(100.0, 99.0), "XLF": _bars(100.0, 101.0)})
 
-    moves: Final = market.backdrop().sectors
+    moves: Final = (await market.backdrop(TODAY)).sectors
 
     assert tuple(move.symbol for move in moves)[:3] == ("XLK", "XLF", "XLE")
     assert all(move.change_percent is None for move in moves[3:])
 
 
-def test_breadth_is_counted_over_the_sectors_that_were_priced() -> None:
+async def test_breadth_is_counted_over_the_sectors_that_were_priced() -> None:
     """An unpriced fund is neither an advancer nor a decliner, and the total says how many counted."""
     market: Final = _market({"XLK": _bars(100.0, 102.0), "XLE": _bars(100.0, 99.0), "XLF": _bars(100.0, 100.0)})
 
-    breadth: Final = market.backdrop().sector_breadth
+    breadth: Final = (await market.backdrop(TODAY)).sector_breadth
 
     assert breadth is not None
     assert (breadth.advancers, breadth.decliners, breadth.unchanged, breadth.total) == (1, 1, 1, 3)
     assert breadth.top[0].symbol == "XLK"
 
 
-def test_every_sector_in_the_basket_is_named_whether_or_not_it_priced() -> None:
+async def test_every_sector_in_the_basket_is_named_whether_or_not_it_priced() -> None:
     """The prose says sector, so a fund missing from the answer would read as a sector that did not move."""
-    moves: Final = _market().backdrop().sectors
+    moves: Final = (await _market().backdrop(TODAY)).sectors
 
     assert {move.symbol for move in moves} == set(SECTOR_ETFS)
     assert all(move.name == SECTOR_ETFS[move.symbol] for move in moves)
 
 
-def test_the_region_asked_for_is_the_one_configured() -> None:
+async def test_the_region_asked_for_is_the_one_configured() -> None:
     asked: Final[list[str]] = []
 
     def status(region: str) -> Mapping[str, object]:
         asked.append(region)
         return STATUS
 
-    _ = YahooMarket(_Prices({}), _Series({}), status, lambda: TODAY, "GB").backdrop()
+    _ = await YahooMarket(_Prices({}), _Series({}), status, lambda: TODAY, "GB").backdrop(TODAY)
 
     assert asked == ["GB"]

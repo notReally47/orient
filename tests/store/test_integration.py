@@ -20,9 +20,7 @@ from orient.domain.models import (
     Bar,
     Claim,
     Instrument,
-    ModelUsage,
     Returns,
-    Run,
     Section,
     Signals,
     Summary,
@@ -33,7 +31,6 @@ from orient.store.bars import BarRepository
 from orient.store.claims import ClaimRepository
 from orient.store.instruments import InstrumentRepository
 from orient.store.pool import Pool, create_pool
-from orient.store.runs import RunRepository
 from orient.store.sessions import SessionRepository
 from orient.store.summaries import SummaryRepository
 
@@ -137,7 +134,7 @@ async def test_bars_are_stored_without_an_instrument_row(pool: Pool, symbol: str
     """The backdrop prices a basket of funds this system will never profile, and stores those bars."""
     await BarRepository(pool).add(symbol, (_bar(date(2026, 8, 12), 6000.0),))
 
-    assert len(await BarRepository(pool).since(symbol, date(2026, 8, 1))) == 1
+    assert len(await BarRepository(pool).between(symbol, date(2026, 8, 1), date(2026, 8, 31))) == 1
 
 
 async def test_re_fetching_a_session_leaves_the_bar_a_summary_already_cited(pool: Pool, symbol: str) -> None:
@@ -147,7 +144,7 @@ async def test_re_fetching_a_session_leaves_the_bar_a_summary_already_cited(pool
     await repository.add(symbol, (_bar(session_date, 6000.0),))
     await repository.add(symbol, (_bar(session_date, 1.0),))
 
-    stored: Final = await repository.since(symbol, session_date)
+    stored: Final = await repository.between(symbol, session_date, session_date)
     assert [bar.close for bar in stored] == [6000.0]
 
 
@@ -155,7 +152,7 @@ async def test_bars_come_back_oldest_first_from_the_requested_date(pool: Pool, s
     repository: Final = BarRepository(pool)
     await repository.add(symbol, tuple(_bar(date(2026, 8, day), float(day)) for day in (12, 10, 11)))
 
-    stored: Final = await repository.since(symbol, date(2026, 8, 11))
+    stored: Final = await repository.between(symbol, date(2026, 8, 11), date(2026, 8, 31))
 
     assert [bar.session_date.day for bar in stored] == [11, 12]
 
@@ -245,7 +242,8 @@ async def test_claims_are_retrievable_by_similarity(pool: Pool, symbol: str) -> 
         summary_id=summary_id,
         subject_symbol=symbol,
         session_date=session_date,
-        kind="observation",
+        kind="attribution",
+        attribution="the sector fell with it",
         statement="Breadth was narrow while volatility stayed low.",
     )
     far: Final = Claim(
@@ -289,7 +287,8 @@ async def test_open_claims_exclude_resolved_ones(pool: Pool, symbol: str) -> Non
         summary_id=summary_id,
         subject_symbol=symbol,
         session_date=session_date,
-        kind="observation",
+        kind="attribution",
+        attribution="the sector fell with it",
         statement="The expectation held.",
     )
     expectation: Final = Claim(
@@ -310,35 +309,3 @@ async def test_open_claims_exclude_resolved_ones(pool: Pool, symbol: str) -> Non
     open_claims: Final = await repository.open_for(symbol)
 
     assert [claim.id for claim in open_claims] == [resolver.id]
-
-
-async def test_a_run_records_its_outcome(pool: Pool, symbol: str) -> None:
-    run: Final = Run(
-        id=uuid4(),
-        symbol=symbol,
-        session_date=date(2026, 8, 12),
-        level="advanced",
-        status="running",
-        trace_id="0af7651916cd43dd8448eb211c80319c",
-    )
-    repository: Final = RunRepository(pool)
-    await repository.start(run)
-    await repository.finish(
-        run.id,
-        "ok",
-        {"gather": 2.5, "write": 4.0},
-        (
-            ModelUsage(phase="gather", model="primary-model", calls=3, prompt_tokens=1_200),
-            ModelUsage(phase="write", model="primary-model", calls=1, prompt_tokens=8_400),
-        ),
-    )
-
-    stored: Final = await repository.get(run.id)
-    assert stored is not None
-    assert stored.status == "ok"
-    assert stored.phase_timings["gather"] == pytest.approx(2.5)
-    assert {(usage.phase, usage.prompt_tokens) for usage in stored.model_usage} == {
-        ("gather", 1_200),
-        ("write", 8_400),
-    }
-    assert stored.finished_at is not None

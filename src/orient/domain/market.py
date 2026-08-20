@@ -12,7 +12,7 @@ at all. A tool returning what it has beats a tool raising because one figure was
 from collections.abc import Mapping
 from datetime import datetime
 
-from orient.domain.models import AssetClass, Breadth, CalendarDate, CrossAsset, Frozen
+from orient.domain.models import AssetClass, Breadth, CalendarDate, CrossAsset, Frozen, Level, Rate
 
 
 class InstrumentMatch(Frozen):
@@ -45,8 +45,8 @@ class InstrumentProfile(Frozen):
     trailing_pe: float | None = None
     forward_pe: float | None = None
     dividend_yield: float | None = None
-    fifty_two_week_high: float | None = None
-    fifty_two_week_low: float | None = None
+    fifty_two_week_high: Level | None = None
+    fifty_two_week_low: Level | None = None
     average_volume: float | None = None
     shares_outstanding: float | None = None
     description: str | None = None
@@ -71,7 +71,7 @@ class MarketSession(Frozen):
 class SectorMove(Frozen):
     symbol: str
     name: str
-    change_percent: float | None = None
+    change_percent: Rate | None = None
 
 
 class MarketContext(Frozen):
@@ -162,3 +162,29 @@ class NewsArticle(Frozen):
     url: str
     published: str | None = None
     snippet: str | None = None
+
+
+class NewsSource(Frozen):
+    """An article named rather than reproduced.
+
+    The URL is deliberately absent. A model cannot follow a link, and on a real search the URLs
+    were 72% of the tool result while the findings they pointed at were 22%. What a writer needs
+    is who said it and when, and the findings carry the attribution already.
+    """
+
+    title: str
+    published: str | None = None
+
+
+class NewsFindings(Frozen):
+    """What the questions turned up, read and condensed before it reaches the writer.
+
+    `findings` is prose a model wrote about articles other people wrote, so nothing in it was
+    measured and no figure inside it may be quoted. The tool says so, the skills say so, and the
+    grounding check enforces it by never admitting this tool's numbers to the quotable set.
+    """
+
+    questions: tuple[str, ...]
+    findings: str
+    sources: tuple[NewsSource, ...] = ()
+    unanswered: tuple[str, ...] = ()

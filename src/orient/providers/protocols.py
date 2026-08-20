@@ -7,6 +7,15 @@ says what a capability is called and takes, not what an implementation names its
 Every method returns a domain type that its implementation validated at the vendor boundary. No
 port returns a frame, a record or a vendor payload, and that is what makes an adapter swappable:
 everything above sees the same values whichever vendor produced them.
+
+Every method is async. Not because vendor SDKs are, they block, but because an implementation is
+free not to be: `providers/cache.py` satisfies `Prices` by reading Postgres. A blocking adapter
+hands its call to a worker thread itself, which puts that decision next to the code that knows it
+blocks rather than repeated in every tool that calls it.
+
+Price windows are inclusive date ranges rather than period strings. A period is always measured
+from now, so a port taking one cannot answer a question about a past session, and every figure
+above it would silently describe today while claiming to describe the day that was asked for.
 """
 
 from collections.abc import Mapping, Sequence
@@ -24,34 +33,40 @@ from orient.domain.models import Bar, Calendar, CalendarKind, Observation
 
 
 class Prices(Protocol):
-    def daily_bars(self, symbol: str, period: str, /) -> tuple[Bar, ...]: ...
+    async def bars(self, symbol: str, start: date, end: date, /) -> tuple[Bar, ...]: ...
 
-    def multi_bars(self, symbols: Sequence[str], period: str, /) -> Mapping[str, tuple[Bar, ...]]: ...
+    async def multi_bars(
+        self,
+        symbols: Sequence[str],
+        start: date,
+        end: date,
+        /,
+    ) -> Mapping[str, tuple[Bar, ...]]: ...
 
 
 class Series(Protocol):
-    def observations(self, series_id: str, start: date, end: date, /) -> tuple[Observation, ...]: ...
+    async def observations(self, series_id: str, start: date, end: date, /) -> tuple[Observation, ...]: ...
 
 
 class Discovery(Protocol):
-    def by_screen(self, key: str, count: int, /) -> tuple[InstrumentMatch, ...]: ...
+    async def by_screen(self, key: str, count: int, /) -> tuple[InstrumentMatch, ...]: ...
 
-    def anything(self, query: str, count: int, /) -> tuple[InstrumentMatch, ...]: ...
+    async def anything(self, query: str, count: int, /) -> tuple[InstrumentMatch, ...]: ...
 
 
 class Reference(Protocol):
-    def profile(self, symbol: str, /) -> InstrumentProfile: ...
+    async def profile(self, symbol: str, /) -> InstrumentProfile: ...
 
-    def implied_move(self, symbol: str, spot: float, today: date, /) -> ImpliedMove | None: ...
+    async def implied_move(self, symbol: str, spot: float, today: date, /) -> ImpliedMove | None: ...
 
 
 class Earnings(Protocol):
-    def detail(self, symbol: str, /) -> EarningsDetail: ...
+    async def detail(self, symbol: str, /) -> EarningsDetail: ...
 
 
 class MarketData(Protocol):
-    def backdrop(self) -> MarketContext: ...
+    async def backdrop(self, as_of: date, /) -> MarketContext: ...
 
 
 class Calendars(Protocol):
-    def entries(self, start: date, end: date, kinds: Sequence[CalendarKind] | None = None, /) -> Calendar: ...
+    async def entries(self, start: date, end: date, kinds: Sequence[CalendarKind] | None = None, /) -> Calendar: ...

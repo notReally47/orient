@@ -11,7 +11,7 @@ from typing import Final
 
 import pytest
 
-from orient.orchestrator.grounding import Grounded, Ungrounded, check, measured
+from orient.domain.grounding import Grounded, Ungrounded, check, measured
 
 SESSION: Final = date(2026, 8, 13)
 

@@ -1,12 +1,12 @@
-"""A whole run, over a scripted model and the real tool server.
+"""The loop: what it hands the model, what it does with the answers, and how a run can end.
 
-These are the control-flow tests: how many times the loop goes round, what it does when a draft
-does not reconcile, what it writes when it gives up, and what the caller is told at each point. The
-prefetch, the schemas and the structured content are real throughout, so a run that would fail on
-the wire fails here.
+The shape being asserted is that the orchestrator decides almost nothing. It looks in the cache,
+it hands over a catalog, and then it executes what the model asks for until `save_summary`
+accepts a summary. A test that passes here while the loop quietly fetched something on the
+model's behalf would be asserting the wrong system.
 """
 
-from datetime import timedelta
+from datetime import date
 from typing import Final
 from uuid import UUID
 
@@ -19,45 +19,48 @@ from orient.domain.models import (
     Summary,
     TrendDistance,
 )
-from orient.llm.chat import Rejected, ToolCall, Unavailable
 from orient.orchestrator.agent import RunRequest, run
 from orient.orchestrator.events import (
-    DraftRejected,
+    CacheHit,
     RunFailed,
     RunFinished,
+    SectionReady,
+    SkillLoaded,
+    ThesisReady,
     ToolFinished,
     ToolStarted,
+    TurnFinished,
 )
 from tests.orchestrator.fakes import (
-    EXTRACTED,
     GROUNDED,
     SESSION_DATE,
+    SYMBOL,
     UNGROUNDED,
+    Cache,
     Recorder,
     RefusingTools,
     ScriptedChat,
-    Store,
     answered,
-    calls_calendar,
+    calls,
     run_deps,
+    saving,
+    unavailable,
 )
-
-SYMBOL: Final = "AAPL"
 
 
 def _request(level: ReadingLevel = "beginner") -> RunRequest:
     return RunRequest(symbol=SYMBOL, session_date=SESSION_DATE, level=level)
 
 
-def _stored_summary() -> Summary:
+def _stored() -> Summary:
     return Summary(
         id=UUID(int=99),
         symbol=SYMBOL,
         session_date=SESSION_DATE,
         level="beginner",
         status="ok",
-        thesis="Apple gave back Monday's gain",
-        sections=(Section(heading="The big picture", body="It fell with technology."),),
+        thesis="The index gave back Monday's gain",
+        sections=(Section(heading="The big picture", body="It fell with the market."),),
         signals_snapshot=Signals(
             symbol=SYMBOL,
             session_date=SESSION_DATE,
@@ -69,298 +72,303 @@ def _stored_summary() -> Summary:
     )
 
 
-async def test_a_cached_summary_is_replayed_without_a_model_call() -> None:
-    """The key covers everything reaching the prompt, so a hit is the same summary, not a similar one."""
-    store: Final = Store(cached=_stored_summary())
-    chat: Final = ScriptedChat()
-    events: Final = Recorder()
+async def test_the_opening_message_carries_the_catalog_and_not_a_single_skill_body() -> None:
+    """The whole point of the rebuild. A body here means tier one and tier two collapsed again."""
+    chat: Final = ScriptedChat(answered(calls=saving()))
 
-    async with run_deps(chat, store) as deps:
+    async with run_deps(chat) as deps:
+        await run(_request(), deps, Recorder())
+
+    system: Final = chat.asked[0].system
+    assert "<available_skills>" in system
+    assert "<name>analysis</name>" in system
+    assert "Establish whether the move was its own" not in system
+    assert "references/" not in system
+
+
+async def test_nothing_is_fetched_before_the_model_has_spoken() -> None:
+    """Prefetch is gone: what an instrument needs is the instrument skill's judgement, not a
+    hardcoded list that only ever suited an equity."""
+    events: Final = Recorder()
+    chat: Final = ScriptedChat(answered(calls=saving()))
+
+    async with run_deps(chat) as deps:
         await run(_request(), deps, events)
 
-    assert chat.asked == []
-    assert store.runs == []
-    assert events.kinds() == (
-        "run_started",
-        "phase_started",
-        "phase_finished",
-        "cache_hit",
-        "thesis_ready",
-        "section_ready",
-        "run_finished",
-    )
+    before: Final = events.kinds().index("turn_finished")
+    assert "tool_started" not in events.kinds()[:before]
 
 
-async def test_a_summary_for_another_level_is_not_a_hit() -> None:
-    store: Final = Store(cached=_stored_summary())
-    chat: Final = ScriptedChat(answered("nothing to add"), answered(GROUNDED), answered(EXTRACTED))
+async def test_the_whole_tool_surface_is_offered_including_the_skills_and_the_save() -> None:
+    chat: Final = ScriptedChat(answered(calls=saving()))
+
+    async with run_deps(chat) as deps:
+        await run(_request(), deps, Recorder())
+
+    offered: Final = set(chat.asked[0].tools)
+    assert {"activate_skill", "read_skill_resource", "save_summary", "recall_history"} <= offered
+
+
+async def test_a_run_ends_when_the_save_is_accepted() -> None:
+    events: Final = Recorder()
+    chat: Final = ScriptedChat(answered(calls=saving()))
+
+    async with run_deps(chat) as deps:
+        await run(_request(), deps, events)
+
+    finished: Final = events.only(RunFinished)
+    assert len(finished) == 1
+    assert finished[0].status == "ok"
+    assert len(chat.asked) == 1
+
+
+async def test_the_saved_markdown_is_what_reaches_the_reader() -> None:
+    """The prose the model saved is the prose announced, so the stream cannot drift from the row."""
     events: Final = Recorder()
 
-    async with run_deps(chat, store) as deps:
-        await run(_request(level="advanced"), deps, events)
+    async with run_deps(ScriptedChat(answered(calls=saving()))) as deps:
+        await run(_request(), deps, events)
 
-    assert "cache_hit" not in events.kinds()
-    assert store.summaries[0].level == "advanced"
+    assert events.only(ThesisReady)[0].thesis.startswith("The index gave back")
+    assert [section.heading for section in events.only(SectionReady)] == [
+        "The big picture",
+        "What moved, and why",
+    ]
 
 
-async def test_a_run_gathers_writes_extracts_and_persists() -> None:
-    store: Final = Store()
+async def test_a_refused_save_does_not_end_the_run() -> None:
+    """The grounding gate is a decision the model acts on, not an error the loop swallows."""
+    events: Final = Recorder()
     chat: Final = ScriptedChat(
-        answered(calls=calls_calendar()),
-        answered("The calendar is clear."),
-        answered(GROUNDED),
-        answered(EXTRACTED),
+        answered(calls=saving(markdown=UNGROUNDED)),
+        answered(calls=saving(markdown=GROUNDED)),
     )
-    events: Final = Recorder()
 
-    async with run_deps(chat, store) as deps:
+    async with run_deps(chat) as deps:
         await run(_request(), deps, events)
 
-    stored: Final = store.summaries[0]
-    assert stored.status == "ok"
-    assert stored.thesis == "Apple gave back Monday's gain alongside its sector"
-    assert [section.heading for section in stored.sections] == ["The big picture", "What moved, and why"]
-    assert stored.annotations[0].term == "breadth"
-
-    assert store.instruments[0].asset_class == "equity"
-    assert store.instruments[0].name == "Apple Inc."
-    assert store.sessions[0].symbol == SYMBOL
-    assert [claim.kind for claim in store.claims] == ["observation", "expectation"]
-    assert len(store.vectors) == len(store.claims)
+    assert len(chat.asked) == 2
     assert events.only(RunFinished)[0].status == "ok"
 
 
-async def test_an_expectation_with_no_date_is_due_at_the_end_of_the_week_it_names() -> None:
-    """The section it comes from is "what to watch this week", so that is when it can be judged."""
-    store: Final = Store()
-    chat: Final = ScriptedChat(answered("nothing to add"), answered(GROUNDED), answered(EXTRACTED))
-
-    async with run_deps(chat, store) as deps:
-        await run(_request(), deps, Recorder())
-
-    expectation: Final = next(claim for claim in store.claims if claim.kind == "expectation")
-    assert expectation.target_date == SESSION_DATE + timedelta(days=7)
-
-
-async def test_the_prefetch_runs_before_the_model_is_asked_anything() -> None:
-    """Signals, context and profile are needed for every summary, so choosing them costs a round trip."""
-    store: Final = Store()
-    chat: Final = ScriptedChat(answered("nothing to add"), answered(GROUNDED), answered(EXTRACTED))
+async def test_loading_a_skill_body_is_reported_with_its_tier() -> None:
+    """On-demand loading is only a claim unless it is observable, and this is where it is observed."""
     events: Final = Recorder()
+    chat: Final = ScriptedChat(
+        answered(calls=calls(("activate_skill", '{"name": "analysis"}'))),
+        answered(calls=saving()),
+    )
 
-    async with run_deps(chat, store) as deps:
+    async with run_deps(chat) as deps:
         await run(_request(), deps, events)
 
-    prefetched: Final = tuple(event.tool for event in events.only(ToolStarted))[:4]
-    assert prefetched == (
-        "compute_instrument_signals",
+    loaded: Final = events.only(SkillLoaded)
+    assert [(entry.skill, entry.tier) for entry in loaded] == [("analysis", "body")]
+    assert loaded[0].characters > 0
+
+
+async def test_reading_a_reference_is_reported_with_the_path() -> None:
+    events: Final = Recorder()
+    chat: Final = ScriptedChat(
+        answered(calls=calls(("read_skill_resource", '{"skill": "analysis", "path": "references/index.md"}'))),
+        answered(calls=saving()),
+    )
+
+    async with run_deps(chat) as deps:
+        await run(_request(), deps, events)
+
+    loaded: Final = events.only(SkillLoaded)[0]
+    assert loaded.tier == "reference"
+    assert loaded.path == "references/index.md"
+
+
+async def test_independent_calls_in_one_turn_are_executed_together() -> None:
+    """The model batches because the skill tells it to; running them in series spends that back."""
+    events: Final = Recorder()
+    chat: Final = ScriptedChat(
+        answered(
+            calls=calls(
+                ("activate_skill", '{"name": "analysis"}'),
+                ("get_instrument_profile", f'{{"symbol": "{SYMBOL}"}}'),
+                ("recall_history", f'{{"symbol": "{SYMBOL}"}}'),
+            )
+        ),
+        answered(calls=saving()),
+    )
+
+    async with run_deps(chat) as deps:
+        await run(_request(), deps, events)
+
+    assert len(events.only(ToolStarted)) == 4
+    assert events.only(TurnFinished)[0].tools == (
+        "activate_skill",
         "get_instrument_profile",
-        "get_market_context",
-        "get_calendar",
+        "recall_history",
     )
-    assert "measured" in chat.asked[0].last
 
 
-async def test_each_phase_names_the_guardrails_it_wants() -> None:
-    """A judge on a gather call would score a research note; no judge on the write call scores nothing."""
-    store: Final = Store()
-    chat: Final = ScriptedChat(answered("nothing to add"), answered(GROUNDED), answered(EXTRACTED))
-
-    async with run_deps(chat, store) as deps:
-        await run(_request(), deps, Recorder())
-
-    gather, write, extract = chat.asked
-    assert gather.guardrails == ("headroom-compression",)
-    assert write.guardrails == ("headroom-compression", "quality-judge")
-    assert extract.guardrails == ()
-    assert extract.model == "fast-model"
-    assert extract.schema is not None
-
-
-async def test_tool_calls_are_executed_and_reported_in_pairs() -> None:
-    store: Final = Store()
-    chat: Final = ScriptedChat(
-        answered(calls=calls_calendar()),
-        answered("done"),
-        answered(GROUNDED),
-        answered(EXTRACTED),
-    )
+async def test_a_turn_reports_what_it_cost() -> None:
     events: Final = Recorder()
 
-    async with run_deps(chat, store) as deps:
+    async with run_deps(ScriptedChat(answered(calls=saving()))) as deps:
         await run(_request(), deps, events)
 
-    assert len(events.only(ToolStarted)) == len(events.only(ToolFinished)) == 5
-    assert all(event.ok for event in events.only(ToolFinished))
+    turn: Final = events.only(TurnFinished)[0]
+    assert turn.turn == 1
+    assert turn.prompt_tokens == 10
+    assert turn.seconds > 0
 
 
-async def test_a_figure_a_gather_tool_returned_is_quotable() -> None:
-    """The prefetch is not the whole evidence: anything the model went and fetched counts too."""
-    store: Final = Store()
-    earnings: Final = (ToolCall(id="call_1", name="get_earnings_detail", arguments='{"symbol": "AAPL"}'),)
-    quoting_earnings: Final = "# It beat by 7.1%\n\n## The big picture\n\nReported EPS came in at 1.5.\n"
-    chat: Final = ScriptedChat(
-        answered(calls=earnings),
-        answered("earnings are in"),
-        answered(quoting_earnings),
-        answered(EXTRACTED),
-    )
+async def test_a_cached_summary_is_replayed_without_a_model_call() -> None:
     events: Final = Recorder()
+    chat: Final = ScriptedChat()
 
-    async with run_deps(chat, store) as deps:
+    async with run_deps(chat, Cache(_stored())) as deps:
         await run(_request(), deps, events)
 
-    assert events.only(DraftRejected) == ()
-    assert store.summaries[0].status == "ok"
+    assert chat.asked == []
+    assert events.only(CacheHit)
+    assert events.kinds()[-1] == "run_finished"
 
 
-async def test_the_gather_loop_stops_at_its_iteration_cap() -> None:
-    """A model that keeps calling tools would otherwise spend the whole request budget on one run."""
-    store: Final = Store()
-    chat: Final = ScriptedChat(
-        *[answered(calls=calls_calendar()) for _ in range(6)],
-        answered(GROUNDED),
-        answered(EXTRACTED),
-    )
+async def test_a_summary_for_another_level_is_not_a_hit() -> None:
+    chat: Final = ScriptedChat(answered(calls=saving()))
 
-    async with run_deps(chat, store) as deps:
-        await run(_request(), deps, Recorder())
+    async with run_deps(chat, Cache(_stored())) as deps:
+        await run(_request(level="advanced"), deps, Recorder())
 
-    assert len([asked for asked in chat.asked if asked.tools]) == 3
-    assert store.summaries[0].status == "ok"
+    assert len(chat.asked) == 1
 
 
-async def test_a_draft_quoting_an_unmeasured_figure_is_written_again() -> None:
-    store: Final = Store()
-    chat: Final = ScriptedChat(
-        answered("nothing to add"),
-        answered(UNGROUNDED),
-        answered(GROUNDED),
-        answered(EXTRACTED),
-    )
+async def test_a_model_that_stops_without_saving_is_nudged_once_then_fails() -> None:
+    """Losing the phase machine means losing its guarantee of termination, so the loop needs one."""
     events: Final = Recorder()
+    chat: Final = ScriptedChat(answered("I think that is enough"), answered("still nothing"))
 
-    async with run_deps(chat, store) as deps:
+    async with run_deps(chat) as deps:
         await run(_request(), deps, events)
 
-    rejected: Final = events.only(DraftRejected)
-    assert len(rejected) == 1
-    assert rejected[0].reason == "grounding"
-    assert "1.93" in chat.asked[2].last
-    assert store.summaries[0].status == "ok"
-
-
-async def test_an_exhausted_revise_is_caveated_rather_than_discarded() -> None:
-    """A summary the reader can see with a caveat beats a run that produced nothing at all."""
-    store: Final = Store()
-    chat: Final = ScriptedChat(
-        answered("nothing to add"),
-        answered(UNGROUNDED),
-        answered(UNGROUNDED),
-        answered(EXTRACTED),
-    )
-    events: Final = Recorder()
-
-    async with run_deps(chat, store) as deps:
-        await run(_request(), deps, events)
-
-    assert store.summaries[0].status == "caveated"
-    assert events.only(RunFinished)[0].status == "caveated"
-    assert store.finished[0][1] == "caveated"
-
-
-async def test_a_blocked_draft_is_written_again_with_the_verdicts() -> None:
-    store: Final = Store()
-    chat: Final = ScriptedChat(
-        answered("nothing to add"),
-        Rejected(feedback="compliance 30/100: the closing line gives advice"),
-        answered(GROUNDED),
-        answered(EXTRACTED),
-    )
-    events: Final = Recorder()
-
-    async with run_deps(chat, store) as deps:
-        await run(_request(), deps, events)
-
-    assert events.only(DraftRejected)[0].reason == "judge"
-    assert "gives advice" in chat.asked[2].last
-    assert store.summaries[0].status == "ok"
-
-
-async def test_a_run_blocked_to_exhaustion_fails_rather_than_inventing_a_summary() -> None:
-    """A blocked answer carries no prose, so there is nothing to caveat and nothing to store."""
-    store: Final = Store()
-    chat: Final = ScriptedChat(
-        answered("nothing to add"),
-        Rejected(feedback="compliance 30/100"),
-        Rejected(feedback="compliance 28/100"),
-    )
-    events: Final = Recorder()
-
-    async with run_deps(chat, store) as deps:
-        await run(_request(), deps, events)
-
-    assert store.summaries == []
+    assert len(chat.asked) == 2
+    assert "You stopped without saving" in chat.asked[1].messages[-1].content
     assert events.only(RunFailed)[0].status == "failed"
-    assert store.finished[0][1] == "failed"
+
+
+async def test_a_run_that_never_saves_stops_at_the_turn_cap() -> None:
+    turns: Final = 3
+    chat: Final = ScriptedChat(*[answered(calls=calls(("recall_history", f'{{"symbol": "{SYMBOL}"}}')))] * 10)
+    events: Final = Recorder()
+
+    async with run_deps(chat, max_turns=turns) as deps:
+        await run(_request(), deps, events)
+
+    assert len(chat.asked) == turns
+    assert "no summary after" in events.only(RunFailed)[0].detail
 
 
 async def test_an_unreachable_proxy_ends_the_run_as_a_value() -> None:
-    store: Final = Store()
-    chat: Final = ScriptedChat(Unavailable("HTTP 503: upstream is down"))
     events: Final = Recorder()
 
-    async with run_deps(chat, store) as deps:
+    async with run_deps(ScriptedChat(unavailable("HTTP 429: quota"))) as deps:
         await run(_request(), deps, events)
 
     failed: Final = events.only(RunFailed)[0]
     assert failed.status == "failed"
-    assert "503" in failed.detail
+    assert "429" in failed.detail
 
 
-async def test_a_caller_that_disconnects_cancels_the_run() -> None:
+async def test_a_caller_that_disconnects_cancels_before_the_model_is_asked() -> None:
+    events: Final = Recorder()
+    chat: Final = ScriptedChat(answered(calls=saving()))
+
     async def gone() -> bool:
         return True
 
-    store: Final = Store()
-    chat: Final = ScriptedChat(answered("nothing to add"))
-    events: Final = Recorder()
-
-    async with run_deps(chat, store) as deps:
+    async with run_deps(chat) as deps:
         await run(_request(), deps, events, gone)
 
     assert chat.asked == []
     assert events.only(RunFailed)[0].status == "cancelled"
-    assert store.summaries == []
 
 
-async def test_a_tool_server_that_will_not_answer_ends_the_run_before_the_model_is_asked() -> None:
-    store: Final = Store()
-    chat: Final = ScriptedChat()
+async def test_a_tool_server_that_will_not_answer_leaves_the_run_recoverable() -> None:
+    """One dead tool is a result the model reads, not a reason to abandon the run."""
     events: Final = Recorder()
+    chat: Final = ScriptedChat(
+        answered(calls=calls(("activate_skill", '{"name": "analysis"}'))),
+        answered("I cannot continue"),
+        answered("still cannot"),
+    )
 
-    async with run_deps(chat, store, catalog=RefusingTools()) as deps:
+    async with run_deps(chat, catalog=RefusingTools()) as deps:
         await run(_request(), deps, events)
 
-    assert chat.asked == []
-    assert "not answering" in events.only(RunFailed)[0].detail
+    assert events.only(RunFailed)
+    assert not events.only(RunFinished)
 
 
-async def test_the_run_record_carries_its_timings_and_what_it_spent() -> None:
-    """A trace in Jaeger is only queryable if the run row beside it says what happened."""
-    store: Final = Store()
-    chat: Final = ScriptedChat(answered("nothing to add"), answered(GROUNDED), answered(EXTRACTED))
+async def test_every_turn_carries_compression_and_the_tool_policy() -> None:
+    """Quality review is not named here: a summary travels as a tool-call argument, so the
+    proxy's post-call judge would score an empty string. It runs inside `save_summary` instead."""
+    chat: Final = ScriptedChat(answered(calls=saving()))
 
-    async with run_deps(chat, store) as deps:
+    async with run_deps(chat) as deps:
         await run(_request(), deps, Recorder())
 
-    assert store.runs[0].status == "running"
-    _, status, timings, usage = store.finished[0]
-    assert status == "ok"
-    assert set(timings) == {"cache", "recall", "prefetch", "gather", "write", "check", "extract", "persist"}
-    assert all(seconds > 0 for seconds in timings.values())
-    assert {(entry.phase, entry.model, entry.calls) for entry in usage} == {
-        ("gather", "primary-model", 1),
-        ("write", "primary-model", 1),
-        ("extract", "fast-model", 1),
-    }
+    assert chat.asked[0].guardrails == ("headroom-compression", "tool-permission-guardrail")
+
+
+async def test_the_research_loop_can_run_on_a_different_model_than_the_writing() -> None:
+    chat: Final = ScriptedChat(answered(calls=saving()))
+
+    async with run_deps(chat, gather_model="fast-model") as deps:
+        await run(_request(), deps, Recorder())
+
+    assert chat.asked[0].model == "fast-model"
+
+
+async def test_a_date_the_market_was_shut_is_saved_under_the_session_that_traded() -> None:
+    """The write boundary owns this now: it files the summary under the date it measured."""
+    events: Final = Recorder()
+    shut: Final = date(SESSION_DATE.year, SESSION_DATE.month, SESSION_DATE.day)
+
+    async with run_deps(ScriptedChat(answered(calls=saving(session=shut)))) as deps:
+        await run(_request(), deps, events)
+
+    assert events.only(RunFinished)[0].status == "ok"
+
+
+async def test_a_tool_called_past_its_budget_is_refused_rather_than_run_again() -> None:
+    """A model that keeps searching burns a daily request allowance on the same question, and
+    the proxy's permission guardrail matches patterns per request rather than counting."""
+    events: Final = Recorder()
+    searching: Final = calls(("search_news", '{"questions": ["why"]}'))
+    chat: Final = ScriptedChat(
+        answered(calls=searching),
+        answered(calls=searching),
+        answered(calls=searching),
+        answered(calls=saving()),
+    )
+
+    async with run_deps(chat, max_calls_per_tool=2) as deps:
+        await run(_request(), deps, events)
+
+    refusals: Final = [e for e in events.only(ToolFinished) if not e.ok]
+    assert len(refusals) == 1
+    assert "its limit" in refusals[0].detail
+    assert events.only(RunFinished)[0].status == "ok"
+
+
+async def test_saving_is_never_refused_on_budget() -> None:
+    """The only way to finish is to save, so a budget that locked it out would strand every run
+    that needed more than a couple of attempts to satisfy the grounding gate."""
+    events: Final = Recorder()
+    chat: Final = ScriptedChat(
+        answered(calls=saving(markdown=UNGROUNDED)),
+        answered(calls=saving(markdown=UNGROUNDED)),
+        answered(calls=saving(markdown=GROUNDED)),
+    )
+
+    async with run_deps(chat, max_calls_per_tool=1) as deps:
+        await run(_request(), deps, events)
+
+    assert events.only(RunFinished)[0].status == "ok"

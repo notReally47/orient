@@ -29,7 +29,7 @@ COLUMNS: Final = (
     "signals_version",
     "skill_version",
     "pinned",
-    "run_id",
+    "trace_id",
     "created_at",
 )
 
@@ -55,11 +55,11 @@ _RECENT: Final = SQL("""
 _INSERT: Final = SQL("""
     INSERT INTO summaries (
         id, symbol, session_date, level, status, thesis, sections, annotations, calendar,
-        signals_snapshot, signals_version, skill_version, pinned, run_id
+        signals_snapshot, signals_version, skill_version, pinned, trace_id
     )
     VALUES (
         %(id)s, %(symbol)s, %(session_date)s, %(level)s, %(status)s, %(thesis)s, %(sections)s, %(annotations)s,
-        %(calendar)s, %(signals_snapshot)s, %(signals_version)s, %(skill_version)s, %(pinned)s, %(run_id)s
+        %(calendar)s, %(signals_snapshot)s, %(signals_version)s, %(skill_version)s, %(pinned)s, %(trace_id)s
     )
     ON CONFLICT (symbol, session_date, level, signals_version, skill_version) DO NOTHING
 """)
@@ -108,7 +108,7 @@ class SummaryRepository:
             "signals_version": summary.signals_version,
             "skill_version": summary.skill_version,
             "pinned": summary.pinned,
-            "run_id": summary.run_id,
+            "trace_id": summary.trace_id,
         }
         async with self._pool.connection() as connection:
             _ = await connection.execute(_INSERT, parameters)

@@ -34,20 +34,6 @@ CREATE TABLE IF NOT EXISTS sessions
 
 CREATE INDEX IF NOT EXISTS sessions_symbol_date ON sessions (symbol, session_date DESC);
 
-CREATE TABLE IF NOT EXISTS runs
-(
-    id            uuid PRIMARY KEY,
-    trace_id      text,
-    symbol        text        NOT NULL,
-    session_date  date        NOT NULL,
-    level         text        NOT NULL CHECK (level IN ('beginner', 'intermediate', 'advanced')),
-    status        text        NOT NULL CHECK (status IN ('running', 'ok', 'caveated', 'failed', 'cancelled')),
-    phase_timings jsonb       NOT NULL DEFAULT '{}'::jsonb,
-    model_usage   jsonb       NOT NULL DEFAULT '[]'::jsonb,
-    started_at    timestamptz NOT NULL DEFAULT now(),
-    finished_at   timestamptz
-);
-
 CREATE TABLE IF NOT EXISTS summaries
 (
     id               uuid PRIMARY KEY,
@@ -63,7 +49,7 @@ CREATE TABLE IF NOT EXISTS summaries
     signals_version  text        NOT NULL,
     skill_version    text        NOT NULL,
     pinned           boolean     NOT NULL DEFAULT false,
-    run_id           uuid        REFERENCES runs (id) ON DELETE SET NULL,
+    trace_id         text,
     created_at       timestamptz NOT NULL DEFAULT now()
 );
 
@@ -80,7 +66,7 @@ CREATE TABLE IF NOT EXISTS claims
     subject_symbol    text        NOT NULL,
     mentioned_symbols text[]      NOT NULL DEFAULT '{}',
     session_date      date        NOT NULL,
-    kind              text        NOT NULL CHECK (kind IN ('observation', 'expectation', 'anomaly')),
+    kind              text        NOT NULL CHECK (kind IN ('attribution', 'expectation', 'anomaly')),
     statement         text        NOT NULL,
     attribution       text,
     target_date       date,
@@ -88,7 +74,10 @@ CREATE TABLE IF NOT EXISTS claims
     resolution        text CHECK (resolution IN ('supported', 'contradicted', 'unresolved')),
     embedding         vector(1536),
     created_at        timestamptz NOT NULL DEFAULT now(),
-    CONSTRAINT expectation_has_target CHECK (kind <> 'expectation' OR target_date IS NOT NULL)
+    CONSTRAINT claims_attribution_has_a_cause
+        CHECK (kind <> 'attribution' OR attribution IS NOT NULL),
+    CONSTRAINT claims_expectation_has_a_date
+        CHECK (kind <> 'expectation' OR target_date IS NOT NULL)
 );
 
 CREATE INDEX IF NOT EXISTS claims_subject_date ON claims (subject_symbol, session_date DESC);

@@ -21,9 +21,9 @@ COLUMNS: Final = ("session_date", "open", "high", "low", "close", "volume")
 _ADAPTER: Final = TypeAdapter(tuple[Bar, ...])
 _PROJECTION: Final = SQL(", ").join(Identifier(name) for name in COLUMNS)
 
-_SINCE: Final = SQL("""
+_BETWEEN: Final = SQL("""
     SELECT {columns} FROM bars
-    WHERE symbol = %(symbol)s AND session_date >= %(since)s
+    WHERE symbol = %(symbol)s AND session_date BETWEEN %(start)s AND %(end)s
     ORDER BY session_date
 """).format(columns=_PROJECTION)
 
@@ -38,10 +38,11 @@ class BarRepository:
     def __init__(self, pool: Pool) -> None:
         self._pool: Final = pool
 
-    async def since(self, symbol: str, since: date) -> tuple[Bar, ...]:
+    async def between(self, symbol: str, start: date, end: date) -> tuple[Bar, ...]:
         """Oldest first, which is the order every window calculation reads them in."""
+        parameters: Final = {"symbol": symbol, "start": start, "end": end}
         async with self._pool.connection() as connection, connection.cursor(row_factory=dict_row) as cursor:
-            _ = await cursor.execute(_SINCE, {"symbol": symbol, "since": since})
+            _ = await cursor.execute(_BETWEEN, parameters)
             rows = await cursor.fetchall()
         return _ADAPTER.validate_python(rows)
 

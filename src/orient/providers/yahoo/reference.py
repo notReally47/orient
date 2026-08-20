@@ -2,10 +2,12 @@
 
 from collections.abc import Callable, Mapping, Sequence
 from datetime import date
+from functools import partial
 from math import sqrt
 from types import MappingProxyType
 from typing import Final
 
+from anyio import to_thread
 from pydantic import TypeAdapter
 
 from orient.domain.market import (
@@ -114,7 +116,10 @@ class YahooReference:
         self._expiries: Final = expiries
         self._calls: Final = calls
 
-    def profile(self, symbol: str) -> InstrumentProfile:
+    async def profile(self, symbol: str) -> InstrumentProfile:
+        return await to_thread.run_sync(partial(self._profile, symbol))
+
+    def _profile(self, symbol: str) -> InstrumentProfile:
         """Fund holdings are fetched only for funds, so an equity costs one request rather than three."""
         info: Final = self._info(symbol)
         base: Final = _PROFILE.validate_python(_profile_fields(symbol, info))
@@ -127,7 +132,10 @@ class YahooReference:
             }
         )
 
-    def implied_move(self, symbol: str, spot: float, today: date) -> ImpliedMove | None:
+    async def implied_move(self, symbol: str, spot: float, today: date) -> ImpliedMove | None:
+        return await to_thread.run_sync(partial(self._implied_move, symbol, spot, today))
+
+    def _implied_move(self, symbol: str, spot: float, today: date) -> ImpliedMove | None:
         """The nearest expiry's at-the-money implied volatility, scaled to that expiry.
 
         One figure, from one expiry. Anything richer invites the writer to talk about options
@@ -170,7 +178,10 @@ class YahooEarnings:
         self._targets: Final = targets
         self._actions: Final = actions
 
-    def detail(self, symbol: str, recent: int = RECENT_ACTIONS) -> EarningsDetail:
+    async def detail(self, symbol: str, recent: int = RECENT_ACTIONS) -> EarningsDetail:
+        return await to_thread.run_sync(partial(self._detail, symbol, recent))
+
+    def _detail(self, symbol: str, recent: int) -> EarningsDetail:
         """Rating actions run to hundreds of rows going back years; only the newest ones inform a day."""
         return EarningsDetail(
             symbol=symbol,

@@ -6,7 +6,7 @@ none of them may silently lose prose the reader was meant to see.
 
 from typing import Final
 
-from orient.orchestrator.sections import Draft, as_markdown, parse, prose
+from orient.domain.sections import Draft, as_markdown, parse, prose
 
 SPINE: Final = """\
 # The index gave back Monday's gain on a narrow tape

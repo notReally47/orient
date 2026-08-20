@@ -9,7 +9,7 @@ from typing import Final
 import pytest
 from pydantic import TypeAdapter
 
-from orient.orchestrator.extraction import SCHEMA, Extraction, parse
+from orient.llm.extraction import SCHEMA, Extraction, parse
 
 _OBJECT: Final = TypeAdapter(dict[str, object])
 
@@ -18,7 +18,7 @@ ANSWER: Final = """\
   "annotations": [{"term": "breadth", "definition": "how many sectors rose against how many fell"}],
   "claims": [
     {
-      "kind": "observation",
+      "kind": "attribution", "attribution": "the sector fell with it",
       "statement": "Energy led the decline",
       "attribution": "crude fell 3%",
       "mentioned_symbols": ["XLE"]
@@ -32,7 +32,7 @@ ANSWER: Final = """\
 def test_a_plain_answer_parses_into_annotations_and_claims() -> None:
     extracted: Final = parse(ANSWER)
     assert extracted.annotations[0].term == "breadth"
-    assert [claim.kind for claim in extracted.claims] == ["observation", "expectation"]
+    assert [claim.kind for claim in extracted.claims] == ["attribution", "expectation"]
     assert extracted.claims[0].mentioned_symbols == ("XLE",)
 
 

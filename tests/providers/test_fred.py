@@ -30,29 +30,29 @@ def _record(day: int, value: object) -> dict[str, object]:
     return {"observation_date": date(2026, 8, day), "value": value}
 
 
-def test_not_a_number_rows_are_dropped() -> None:
+async def test_not_a_number_rows_are_dropped() -> None:
     provider: Final = FredProvider(_fetch((_record(3, 4.2), _record(4, float("nan")), _record(5, 4.3))))
-    observations: Final = provider.observations("DGS10", _START, _END)
+    observations: Final = await provider.observations("DGS10", _START, _END)
     assert tuple(entry.observation_date.day for entry in observations) == (3, 5)
 
 
-def test_null_rows_are_dropped() -> None:
+async def test_null_rows_are_dropped() -> None:
     provider: Final = FredProvider(_fetch((_record(3, 4.2), _record(4, None))))
-    assert len(provider.observations("DGS10", _START, _END)) == 1
+    assert len(await provider.observations("DGS10", _START, _END)) == 1
 
 
-def test_a_series_of_only_missing_values_is_empty_rather_than_an_error() -> None:
+async def test_a_series_of_only_missing_values_is_empty_rather_than_an_error() -> None:
     provider: Final = FredProvider(_fetch((_record(3, float("nan")), _record(4, None))))
-    assert provider.observations("DGS10", _START, _END) == ()
+    assert await provider.observations("DGS10", _START, _END) == ()
 
 
-def test_published_values_survive_with_their_dates() -> None:
+async def test_published_values_survive_with_their_dates() -> None:
     provider: Final = FredProvider(_fetch((_record(3, 4.2),)))
-    observation: Final = provider.observations("DGS10", _START, _END)[0]
+    observation: Final = (await provider.observations("DGS10", _START, _END))[0]
     assert (observation.observation_date, observation.value) == (date(2026, 8, 3), 4.2)
 
 
-def test_a_non_numeric_value_fails_rather_than_being_coerced_to_zero() -> None:
+async def test_a_non_numeric_value_fails_rather_than_being_coerced_to_zero() -> None:
     provider: Final = FredProvider(_fetch((_record(3, "unavailable"),)))
     with pytest.raises(ValidationError):
-        _ = provider.observations("DGS10", _START, _END)
+        _ = await provider.observations("DGS10", _START, _END)

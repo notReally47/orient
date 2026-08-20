@@ -5,50 +5,36 @@ from typing import Annotated
 from mcp.server import MCPServer
 from pydantic import Field
 
+from orient.domain.market import NewsFindings
+from orient.llm.research import MAX_QUESTIONS
 from orient.mcp.deps import ToolDeps
-from orient.mcp.results import KnowledgeResults, NewsResults, RecalledClaim
-
-MAX_ARTICLES = 20
-MAX_CLAIMS = 25
 
 
 def register(server: MCPServer, deps: ToolDeps) -> None:
     @server.tool()
     async def search_news(
-        query: Annotated[str, Field(description="What to search for, e.g. 'why did the S&P 500 fall today'")],
-        limit: Annotated[int, Field(description="Most articles to return", ge=1, le=MAX_ARTICLES)] = 5,
-    ) -> NewsResults:
-        """Search recent news for an explanation of a move.
-
-        Returns headline, link and an opening extract. Treat what it returns as a claim someone
-        made, not as established fact, and never quote a figure from it as if it were measured.
-        """
-        articles = await deps.search.news(query, limit)
-        return NewsResults(query=query, articles=articles)
-
-    @server.tool()
-    async def search_knowledge(
-        query: Annotated[
-            str,
-            Field(description="A description of the situation, e.g. 'breadth narrow while volatility stayed low'"),
+        questions: Annotated[
+            tuple[str, ...],
+            Field(
+                description=(
+                    "Every question you want answered, together. Ask full questions rather than "
+                    "tickers: 'why did semiconductors fall on 13 August 2026' beats 'NVDA'"
+                ),
+                min_length=1,
+                max_length=MAX_QUESTIONS,
+            ),
         ],
-        symbol: Annotated[
-            str | None,
-            Field(description="Restrict to claims about this symbol or that mention it. All symbols when unset"),
-        ] = None,
-        limit: Annotated[int, Field(description="Most claims to return", ge=1, le=MAX_CLAIMS)] = 10,
-    ) -> KnowledgeResults:
-        """Find things we previously said that resemble the situation now.
+    ) -> NewsFindings:
+        """Answer several questions about a move from recent news, in one call.
 
-        This is for cross-time analogy, not for recalling recent history: the last few sessions and
-        any open expectations are already supplied without asking. Use it to answer when something
-        last looked like this.
+        Ask everything you want to know at once. The questions are searched in parallel and read
+        for you, so asking six costs the same round trip as asking one, and there is no reason to
+        hold back on the second question.
+
+        What comes back is somebody's claim about the market rather than a measurement. Use it to
+        explain a move; never quote a figure out of it, because no figure in here was measured and
+        the grounding check will reject it.
         """
-        vectors = await deps.embeddings.embed([query])
-        if not vectors:
-            return KnowledgeResults(query=query)
+        return await deps.research.investigate(questions)
 
-        claims = await deps.claims.similar(vectors[0], symbol=symbol, limit=limit)
-        return KnowledgeResults(query=query, claims=tuple(RecalledClaim.of(claim) for claim in claims))
-
-    _ = (search_news, search_knowledge)
+    _ = search_news

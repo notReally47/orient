@@ -14,11 +14,11 @@ from pydantic import BaseModel, ConfigDict, TypeAdapter
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
-from orient.domain.market import EarningsDetail, InstrumentProfile, MarketContext
+from orient.domain.market import EarningsDetail, InstrumentProfile, MarketContext, NewsFindings
 from orient.domain.models import Calendar, Signals
-from orient.mcp.results import InstrumentMatches, KnowledgeResults, NewsResults
+from orient.mcp.results import InstrumentMatches, KnowledgeResults
 from orient.mcp.server import create_server
-from tests.mcp.fakes import fund_reference, tool_deps
+from tests.mcp.fakes import SYNTHESIS, TODAY, fund_reference, tool_deps
 
 Model = TypeVar("Model", bound=BaseModel)
 
@@ -44,6 +44,8 @@ def parsed(result: object, model: type[Model]) -> Model:
 
 EXPECTED_TOOLS: Final = frozenset(
     {
+        "activate_skill",
+        "read_skill_resource",
         "discover_instruments",
         "get_price_history",
         "compute_instrument_signals",
@@ -52,7 +54,9 @@ EXPECTED_TOOLS: Final = frozenset(
         "get_earnings_detail",
         "get_calendar",
         "search_news",
+        "recall_history",
         "search_knowledge",
+        "save_summary",
     }
 )
 
@@ -110,18 +114,19 @@ async def test_discovery_uses_the_screen_when_one_is_named() -> None:
 
 async def test_signals_come_back_computed_rather_than_as_raw_bars() -> None:
     async with tool_deps() as deps:
-        result = await create_server(deps).call_tool("compute_instrument_signals", {"symbol": "^GSPC"})
+        arguments = {"symbol": "^GSPC", "session_date": TODAY}
+        result = await create_server(deps).call_tool("compute_instrument_signals", arguments)
 
     signals = parsed(result, Signals)
     assert signals.symbol == "^GSPC"
-    assert signals.returns.one_day == pytest.approx(1 / 101)
+    assert signals.returns.one_day == round(1 / 101, 4)
     assert signals.trend.from_200_day is None
 
 
 async def test_market_context_reports_breadth_as_sector_level() -> None:
     """The field is named sector_breadth so a writer cannot present it as index breadth."""
     async with tool_deps() as deps:
-        result = await create_server(deps).call_tool("get_market_context", {})
+        result = await create_server(deps).call_tool("get_market_context", {"session_date": TODAY})
 
     context = parsed(result, MarketContext)
     assert context.sector_breadth is not None
@@ -132,7 +137,7 @@ async def test_market_context_reports_breadth_as_sector_level() -> None:
 async def test_market_context_takes_yields_from_the_series_provider() -> None:
     """Yahoo publishes no 2-year index, so the curve spread can only come from FRED."""
     async with tool_deps() as deps:
-        result = await create_server(deps).call_tool("get_market_context", {})
+        result = await create_server(deps).call_tool("get_market_context", {"session_date": TODAY})
 
     cross = parsed(result, MarketContext).cross_asset
     assert cross.yield_10y == pytest.approx(4.0)
@@ -174,18 +179,32 @@ async def test_earnings_detail_omits_the_implied_move_until_a_price_is_given() -
 
 async def test_the_calendar_merges_all_four_sources_soonest_first() -> None:
     async with tool_deps() as deps:
-        result = await create_server(deps).call_tool("get_calendar", {"days": 7})
+        result = await create_server(deps).call_tool("get_calendar", {"session_date": TODAY, "days": 7})
 
     kinds = [entry.kind for entry in parsed(result, Calendar).entries]
     assert set(kinds) == {"earnings", "economic", "ipo", "split"}
     assert kinds[-1] == "ipo"
 
 
-async def test_news_search_returns_articles_with_their_source() -> None:
+async def test_news_search_answers_every_question_in_one_call() -> None:
+    """Six questions cost one round trip, which is the whole reason the tool takes a list."""
+    questions: Final = ("why did it fall", "what did the CPI print say", "did the sector move too")
     async with tool_deps() as deps:
-        result = await create_server(deps).call_tool("search_news", {"query": "why did it fall"})
+        result = await create_server(deps).call_tool("search_news", {"questions": questions})
 
-    assert parsed(result, NewsResults).articles[0].url == "https://example.test/a"
+    findings: Final = parsed(result, NewsFindings)
+    assert findings.questions == questions
+    assert findings.findings == SYNTHESIS
+    assert findings.sources[0].title == "Why it moved"
+
+
+async def test_an_article_keeps_the_date_the_search_tool_gave_it() -> None:
+    """The proxy answers `date` and Exa answers `publishedDate`. Reading one drops every date,
+    and an undated article is one the writer cannot tell from last year's."""
+    async with tool_deps() as deps:
+        result = await create_server(deps).call_tool("search_news", {"questions": ("why did it fall",)})
+
+    assert parsed(result, NewsFindings).sources[0].published == "2026-08-13T00:00:00.000Z"
 
 
 async def test_knowledge_search_strips_storage_identifiers() -> None:

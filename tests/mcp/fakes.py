@@ -14,10 +14,14 @@ from typing import Final
 import httpx
 
 from orient.domain.models import Observation
+from orient.llm.chat import Answered, AssistantMessage, Completion, Message, Spend, ToolSchema
 from orient.llm.embeddings import EmbeddingClient
+from orient.llm.judge import JudgeClient
+from orient.llm.research import Researcher
 from orient.llm.search import SearchClient
 from orient.mcp.deps import ToolDeps
 from orient.providers._untyped import Records
+from orient.providers.cache import CachedPrices
 from orient.providers.yahoo import (
     YahooCalendars,
     YahooDiscovery,
@@ -26,8 +30,12 @@ from orient.providers.yahoo import (
     YahooPrices,
     YahooReference,
 )
+from orient.skills.loader import Skills
 from orient.store.bars import BarRepository
 from orient.store.claims import ClaimRepository
+from orient.store.instruments import InstrumentRepository
+from orient.store.sessions import SessionRepository
+from orient.store.summaries import SummaryRepository
 from tests.store.fakes import FakePool, as_pool
 
 EASTERN: Final = timezone(timedelta(hours=-4), "EDT")
@@ -49,8 +57,26 @@ def bar_records(count: int = 3, close: float = 100.0) -> Records:
     )
 
 
+SYNTHESIS: Final = "Reuters reported that wholesale inflation cooled."
+
+
+class _Synthesiser:
+    """The fast model, scripted. The point under test is the fan-out, not what a model says."""
+
+    async def complete(
+        self,
+        model: str,
+        messages: Sequence[Message],
+        tools: Sequence[ToolSchema] = (),
+        guardrails: Sequence[str] = (),
+        schema: Mapping[str, object] | None = None,
+    ) -> Completion:
+        del model, messages, tools, guardrails, schema
+        return Answered(message=AssistantMessage(content=SYNTHESIS), spend=Spend())
+
+
 class _Series:
-    def observations(self, series_id: str, start: date, end: date) -> tuple[Observation, ...]:
+    async def observations(self, series_id: str, start: date, end: date) -> tuple[Observation, ...]:
         del start, end
         return (Observation(observation_date=TODAY, value=4.0 if series_id == "DGS10" else 3.5),)
 
@@ -198,22 +224,33 @@ def _splits_calendar(start: date, end: date) -> Records:
 
 
 def _prices() -> YahooPrices:
-    def fetch_one(symbol: str, period: str) -> Records:
-        del symbol, period
+    def fetch_one(symbol: str, start: date, end: date) -> Records:
+        del symbol, start, end
         return bar_records(count=3)
 
-    def fetch_many(symbols: Sequence[str], period: str) -> Mapping[str, Records]:
-        del period
+    def fetch_many(symbols: Sequence[str], start: date, end: date) -> Mapping[str, Records]:
+        del start, end
         return {symbol: bar_records(count=3, close=100.0) for symbol in symbols}
 
     return YahooPrices(fetch_one, fetch_many)
 
 
 def _proxy_handler(request: httpx.Request) -> httpx.Response:
+    if request.url.path.endswith("/apply_guardrail"):
+        return httpx.Response(200, content=b'{"guardrail_name": "quality-judge"}')
     if request.url.path.endswith("/embeddings"):
         payload: object = {"data": [{"index": 0, "embedding": [0.1] * DIMENSIONS}]}
     else:
-        payload = {"results": [{"title": "Why it moved", "url": "https://example.test/a", "text": "Because."}]}
+        payload = {
+            "results": [
+                {
+                    "title": "Why it moved",
+                    "url": "https://example.test/a",
+                    "snippet": "Because inflation cooled.",
+                    "date": "2026-08-13T00:00:00.000Z",
+                }
+            ]
+        }
     return httpx.Response(200, content=json.dumps(payload).encode())
 
 
@@ -222,7 +259,8 @@ async def tool_deps(pool: FakePool | None = None) -> AsyncGenerator[ToolDeps, No
     store: Final = pool if pool is not None else FakePool()
     transport: Final = httpx.MockTransport(_proxy_handler)
     async with httpx.AsyncClient(transport=transport, base_url="http://proxy") as client:
-        prices = _prices()
+        prices = CachedPrices(_prices(), BarRepository(as_pool(store)))
+        synthesiser = _Synthesiser()
         yield ToolDeps(
             prices=prices,
             discovery=YahooDiscovery(_lookup, _search, _screen),
@@ -230,10 +268,16 @@ async def tool_deps(pool: FakePool | None = None) -> AsyncGenerator[ToolDeps, No
             earnings=YahooEarnings(_earnings_events, _estimates, _trend, _revisions, _targets, _actions),
             market=YahooMarket(prices, _Series(), _status, lambda: TODAY),
             calendars=YahooCalendars(_earnings_calendar, _economic_calendar, _ipo_calendar, _splits_calendar),
-            search=SearchClient(client, "exa-search"),
-            bars=BarRepository(as_pool(store)),
+            research=Researcher(SearchClient(client, "exa-search"), synthesiser, "fast-model"),
+            skills=Skills(),
+            chat=synthesiser,
+            fast_model="fast-model",
             claims=ClaimRepository(as_pool(store)),
+            judge=JudgeClient(client, "quality-judge"),
             embeddings=EmbeddingClient(client, "embedding-model", DIMENSIONS),
+            instruments=InstrumentRepository(as_pool(store)),
+            sessions=SessionRepository(as_pool(store)),
+            summaries=SummaryRepository(as_pool(store)),
             clock=lambda: TODAY,
         )
 

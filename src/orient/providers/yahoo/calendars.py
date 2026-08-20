@@ -9,8 +9,10 @@ cost the other forty-seven, and partial success is a first-class result everywhe
 
 from collections.abc import Callable, Mapping, Sequence
 from datetime import date
+from functools import partial
 from typing import Final
 
+from anyio import to_thread
 from pydantic import TypeAdapter, ValidationError
 
 from orient.domain.models import Calendar, CalendarEntry, CalendarKind
@@ -99,7 +101,15 @@ class YahooCalendars:
             "split": (splits, _split_entry),
         }
 
-    def entries(
+    async def entries(
+        self,
+        start: date,
+        end: date,
+        kinds: Sequence[CalendarKind] | None = None,
+    ) -> Calendar:
+        return await to_thread.run_sync(partial(self._entries, start, end, kinds))
+
+    def _entries(
         self,
         start: date,
         end: date,

@@ -17,6 +17,8 @@ from tests.mcp.fakes import tool_deps
 
 EXPECTED_TOOLS: Final = frozenset(
     {
+        "activate_skill",
+        "read_skill_resource",
         "discover_instruments",
         "get_price_history",
         "compute_instrument_signals",
@@ -25,7 +27,9 @@ EXPECTED_TOOLS: Final = frozenset(
         "get_earnings_detail",
         "get_calendar",
         "search_news",
+        "recall_history",
         "search_knowledge",
+        "save_summary",
     }
 )
 
@@ -54,13 +58,13 @@ async def test_each_schema_carries_what_the_model_needs_to_choose() -> None:
     ("tool", "arguments"),
     [
         ("discover_instruments", '{"query": "apple"}'),
-        ("get_price_history", '{"symbol": "AAPL"}'),
-        ("compute_instrument_signals", '{"symbol": "AAPL"}'),
-        ("get_market_context", "{}"),
+        ("get_price_history", '{"symbol": "AAPL", "session_date": "2026-08-12"}'),
+        ("compute_instrument_signals", '{"symbol": "AAPL", "session_date": "2026-08-12"}'),
+        ("get_market_context", '{"session_date": "2026-08-12"}'),
         ("get_instrument_profile", '{"symbol": "AAPL"}'),
         ("get_earnings_detail", '{"symbol": "AAPL"}'),
-        ("get_calendar", "{}"),
-        ("search_news", '{"query": "why did the S&P 500 fall"}'),
+        ("get_calendar", '{"session_date": "2026-08-12"}'),
+        ("search_news", '{"questions": ["why did the S&P 500 fall"]}'),
         ("search_knowledge", '{"query": "breadth narrow while volatility stayed low"}'),
     ],
 )
@@ -78,7 +82,7 @@ async def test_every_tool_answers_within_the_schema_it_declared(tool: str, argum
 
 async def test_a_call_comes_back_as_structured_content() -> None:
     async with _catalog() as tools:
-        outcome = await tools.execute("get_market_context", "{}")
+        outcome = await tools.execute("get_market_context", '{"session_date": "2026-08-12"}')
     assert isinstance(outcome, Succeeded)
     assert outcome.structured is not None
     assert "cross_asset" in outcome.structured
@@ -87,7 +91,8 @@ async def test_a_call_comes_back_as_structured_content() -> None:
 
 async def test_arguments_reach_the_tool() -> None:
     async with _catalog() as tools:
-        outcome = await tools.execute("get_price_history", '{"symbol": "AAPL", "period": "5d"}')
+        arguments = '{"symbol": "AAPL", "session_date": "2026-08-12", "days": 5}'
+        outcome = await tools.execute("get_price_history", arguments)
     assert isinstance(outcome, Succeeded)
     assert outcome.structured is not None
     assert outcome.structured["symbol"] == "AAPL"

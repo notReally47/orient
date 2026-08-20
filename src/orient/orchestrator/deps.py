@@ -7,7 +7,7 @@ drive the real code path over records held in memory rather than over canned SQL
 The `psycopg`-backed repositories satisfy these structurally, so nothing implements them by name.
 """
 
-from collections.abc import Callable, Generator, Mapping, Sequence
+from collections.abc import Callable, Generator
 from contextlib import AbstractContextManager, contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -15,58 +15,14 @@ from typing import Protocol
 from uuid import UUID, uuid4
 
 from orient.config import Settings
-from orient.domain.models import (
-    Claim,
-    Instrument,
-    ModelUsage,
-    Run,
-    RunStatus,
-    Signals,
-    Summary,
-    SummaryKey,
-)
+from orient.domain.models import Summary, SummaryKey
 from orient.llm.chat import ChatModel
-from orient.orchestrator.skills import Skills
 from orient.orchestrator.tools import ToolCatalog
+from orient.skills.loader import Skills
 
 
 class Summaries(Protocol):
     async def find(self, key: SummaryKey, /) -> Summary | None: ...
-
-    async def add(self, summary: Summary, /) -> None: ...
-
-
-class Sessions(Protocol):
-    async def recent(self, symbol: str, version: str, /) -> tuple[Signals, ...]: ...
-
-    async def upsert(self, signals: Signals, /) -> None: ...
-
-
-class Claims(Protocol):
-    async def open_for(self, symbol: str, /) -> tuple[Claim, ...]: ...
-
-    async def add(self, claims: Sequence[Claim], embeddings: Sequence[Sequence[float]], /) -> None: ...
-
-
-class Instruments(Protocol):
-    async def upsert(self, instrument: Instrument, /) -> None: ...
-
-
-class Runs(Protocol):
-    async def start(self, run: Run, /) -> None: ...
-
-    async def finish(
-        self,
-        run_id: UUID,
-        status: RunStatus,
-        phase_timings: Mapping[str, float],
-        model_usage: Sequence[ModelUsage],
-        /,
-    ) -> None: ...
-
-
-class Embeddings(Protocol):
-    async def embed(self, texts: Sequence[str], /) -> tuple[tuple[float, ...], ...]: ...
 
 
 def now() -> datetime:
@@ -75,6 +31,14 @@ def now() -> datetime:
 
 def no_trace() -> str | None:
     return None
+
+
+def as_uuid(value: str) -> UUID:
+    """The tool server answers with an id as text; a malformed one must not end the run."""
+    try:
+        return UUID(value)
+    except ValueError:
+        return uuid4()
 
 
 @contextmanager
@@ -88,17 +52,19 @@ Span = Callable[[str], AbstractContextManager[None]]
 
 @dataclass(frozen=True, slots=True)
 class RunDeps:
+    """What one run reaches for: a model, a tool surface, the skill catalog and the cache.
+
+    Storage is one read. Writing happens behind `save_summary` on the tool server, so the loop
+    holds no repository it could write through and no guarantee it could forget to apply.
+    """
+
     settings: Settings
     chat: ChatModel
     tools: ToolCatalog
     skills: Skills
-    embeddings: Embeddings
-    instruments: Instruments
-    sessions: Sessions
     summaries: Summaries
-    claims: Claims
-    runs: Runs
     clock: Callable[[], datetime] = now
     new_id: Callable[[], UUID] = uuid4
     trace_id: Callable[[], str | None] = no_trace
+    as_uuid: Callable[[str], UUID] = as_uuid
     span: Span = no_span

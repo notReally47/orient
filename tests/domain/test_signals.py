@@ -104,7 +104,7 @@ def test_moving_average_distance_needs_the_full_window() -> None:
 
     full: Final = compute_signals("^GSPC", _bars([100.0] * 49 + [110.0]))
     assert full is not None
-    assert full.trend.from_50_day == pytest.approx(110.0 / 100.2 - 1)
+    assert full.trend.from_50_day == round(110.0 / 100.2 - 1, 4)
     assert full.trend.from_200_day is None
 
 
@@ -138,7 +138,7 @@ def test_volume_ratio_compares_the_latest_session_with_its_twenty_day_average() 
     volumes: Final = [100] * 19 + [200]
     signals: Final = compute_signals("^GSPC", _bars([100.0] * 20, volumes))
     assert signals is not None
-    assert signals.volume_vs_20_day == pytest.approx(200 / 105)
+    assert signals.volume_vs_20_day == round(200 / 105, 4)
 
 
 def test_volume_ratio_is_none_before_the_window_fills() -> None:

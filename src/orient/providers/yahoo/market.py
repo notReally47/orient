@@ -11,9 +11,11 @@ resource. The batched download that makes that one request rather than three sta
 
 from collections.abc import Callable, Mapping, Sequence
 from datetime import UTC, date, datetime, timedelta
+from functools import partial
 from types import MappingProxyType
 from typing import Final
 
+from anyio import to_thread
 from pydantic import TypeAdapter
 
 from orient.domain.market import MarketContext, MarketSession, SectorMove
@@ -23,7 +25,7 @@ from orient.providers.protocols import Prices, Series
 
 VIX: Final = "^VIX"
 DEFAULT_REGION: Final = "US"
-BACKDROP_PERIOD: Final = "1mo"
+BACKDROP_LOOKBACK: Final = timedelta(days=30)
 SERIES_LOOKBACK: Final = timedelta(days=30)
 CLOSES_FOR_A_CHANGE: Final = 2
 
@@ -96,24 +98,31 @@ class YahooMarket:
         self._clock: Final = clock
         self._region: Final = region
 
-    def backdrop(self) -> MarketContext:
-        bars: Final = self._prices.multi_bars((*CROSS_ASSET_TICKERS, *SECTOR_ETFS), BACKDROP_PERIOD)
+    async def backdrop(self, as_of: date) -> MarketContext:
+        bars: Final = await self._prices.multi_bars(
+            (*CROSS_ASSET_TICKERS, *SECTOR_ETFS),
+            as_of - BACKDROP_LOOKBACK,
+            as_of,
+        )
         moves: Final = self._sectors(bars)
         return MarketContext(
-            session=self._session(),
-            cross_asset=self._cross_asset(bars),
+            session=await self._session(as_of),
+            cross_asset=await self._cross_asset(bars, as_of),
             sectors=moves,
             sector_breadth=Breadth.over({move.symbol: move.change_percent for move in moves}),
         )
 
-    def _session(self) -> MarketSession:
-        return _SESSION.validate_python(market_status_fields(self._status(self._region)))
+    async def _session(self, as_of: date) -> MarketSession | None:
+        """Live status describes now, so it says nothing true about a session already closed."""
+        if as_of < self._clock():
+            return None
+        status: Final = await to_thread.run_sync(partial(self._status, self._region))
+        return _SESSION.validate_python(market_status_fields(status))
 
-    def _cross_asset(self, bars: Mapping[str, Sequence[Bar]]) -> CrossAsset:
-        end: Final = self._clock()
+    async def _cross_asset(self, bars: Mapping[str, Sequence[Bar]], as_of: date) -> CrossAsset:
         levels: Final = {field: _last_close(bars.get(ticker, ())) for ticker, field in CROSS_ASSET_TICKERS.items()}
         rates: Final = {
-            field: _latest(self._series.observations(name, end - SERIES_LOOKBACK, end))
+            field: _latest(await self._series.observations(name, as_of - SERIES_LOOKBACK, as_of))
             for name, field in CROSS_ASSET_SERIES.items()
         }
         return CrossAsset(**levels, **rates, vix_change=_session_change(bars.get(VIX, ())))

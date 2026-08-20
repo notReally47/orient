@@ -72,12 +72,12 @@ class _Prices:
             for offset in range(count)
         )
 
-    def daily_bars(self, symbol: str, period: str) -> tuple[Bar, ...]:
-        del symbol, period
+    async def bars(self, symbol: str, start: date, end: date) -> tuple[Bar, ...]:
+        del symbol, start, end
         return self._bars
 
-    def multi_bars(self, symbols: Sequence[str], period: str) -> Mapping[str, tuple[Bar, ...]]:
-        del period
+    async def multi_bars(self, symbols: Sequence[str], start: date, end: date) -> Mapping[str, tuple[Bar, ...]]:
+        del start, end
         return dict.fromkeys(symbols, self._bars)
 
 
@@ -87,23 +87,23 @@ class _Series:
             Observation(observation_date=_FIRST_SESSION + timedelta(days=offset), value=4.0) for offset in range(count)
         )
 
-    def observations(self, series_id: str, start: date, end: date) -> tuple[Observation, ...]:
+    async def observations(self, series_id: str, start: date, end: date) -> tuple[Observation, ...]:
         del series_id, start, end
         return self._observations
 
 
 class _ExplodingPrices:
-    def daily_bars(self, symbol: str, period: str) -> tuple[Bar, ...]:
-        del symbol, period
+    async def bars(self, symbol: str, start: date, end: date) -> tuple[Bar, ...]:
+        del symbol, start, end
         raise ConnectionError(_UNREACHABLE)
 
-    def multi_bars(self, symbols: Sequence[str], period: str) -> Mapping[str, tuple[Bar, ...]]:
-        del symbols, period
+    async def multi_bars(self, symbols: Sequence[str], start: date, end: date) -> Mapping[str, tuple[Bar, ...]]:
+        del symbols, start, end
         raise ConnectionError(_UNREACHABLE)
 
 
 class _ExplodingSeries:
-    def observations(self, series_id: str, start: date, end: date) -> tuple[Observation, ...]:
+    async def observations(self, series_id: str, start: date, end: date) -> tuple[Observation, ...]:
         del series_id, start, end
         raise ConnectionError(_UNREACHABLE)
 
@@ -155,8 +155,14 @@ def test_guardrails_fail_when_the_judge_is_not_loaded() -> None:
     assert "quality-judge" in result.detail
 
 
-def test_guardrails_pass_when_both_are_loaded() -> None:
-    payload: Final = {"guardrails": [{"guardrail_name": "headroom-compression"}, {"guardrail_name": "quality-judge"}]}
+def test_guardrails_pass_when_every_required_one_is_loaded() -> None:
+    payload: Final = {
+        "guardrails": [
+            {"guardrail_name": "headroom-compression"},
+            {"guardrail_name": "quality-judge"},
+            {"guardrail_name": "tool-permission-guardrail"},
+        ]
+    }
     assert isinstance(check_guardrails(_deps(_json_handler(payload))), Passed)
 
 

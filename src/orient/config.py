@@ -29,14 +29,32 @@ class Settings(BaseSettings):
 
     primary_model: str = Field(default="primary-model")
     fast_model: str = Field(default="fast-model")
+    gather_model: str = Field(
+        default="primary-model",
+        description="Which role runs the research loop. Writing is always the primary model.",
+    )
     judge_model: str = Field(default="judge-model")
     embedding_model: str = Field(default="embedding-model")
     embedding_dimensions: int = Field(default=1536)
 
     search_tool_name: str = Field(default="exa-search")
+    judge_guardrail: str = Field(
+        default="quality-judge",
+        description="The proxy guardrail asked to review a summary before it is stored.",
+    )
 
-    revise_max_attempts: int = Field(default=2, ge=0, le=5)
-    gather_max_iterations: int = Field(default=6, ge=1, le=20)
+    max_calls_per_tool: int = Field(
+        default=3,
+        ge=1,
+        le=20,
+        description="How often one tool may be called in a run before the loop refuses it.",
+    )
+    max_turns: int = Field(
+        default=12,
+        ge=2,
+        le=30,
+        description="Model turns before a run gives up. A turn may carry several tool calls.",
+    )
     requests_per_minute: int = Field(default=15, ge=1)
 
     request_timeout_seconds: float = Field(default=120.0, gt=0)

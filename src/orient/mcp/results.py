@@ -6,8 +6,12 @@ whose field says what the list is, and leaves room to add a count or a caveat wi
 the tool's shape.
 """
 
-from orient.domain.market import InstrumentMatch, NewsArticle
-from orient.domain.models import Bar, Claim, Frozen
+from datetime import date
+from typing import Literal
+from uuid import UUID
+
+from orient.domain.market import InstrumentMatch
+from orient.domain.models import Bar, Claim, Frozen, Signals
 
 
 class InstrumentMatches(Frozen):
@@ -17,13 +21,9 @@ class InstrumentMatches(Frozen):
 
 class PriceHistory(Frozen):
     symbol: str
-    period: str
+    start: date
+    end: date
     bars: tuple[Bar, ...] = ()
-
-
-class NewsResults(Frozen):
-    query: str
-    articles: tuple[NewsArticle, ...] = ()
 
 
 class RecalledClaim(Frozen):
@@ -49,3 +49,49 @@ class RecalledClaim(Frozen):
 class KnowledgeResults(Frozen):
     query: str
     claims: tuple[RecalledClaim, ...] = ()
+
+
+class SaveOutcome(Frozen):
+    """Accepted or refused, as one model rather than a union.
+
+    The SDK derives a tool's output schema from its return annotation, and a union has no single
+    schema, so a union comes back as text with no structured content at all. One model with a tag
+    keeps the schema and keeps the caller matching on a discriminator rather than on a shape.
+    """
+
+    outcome: Literal["saved", "refused"]
+    summary_id: UUID | None = None
+    session_date: date | None = None
+    sections: int = 0
+    claims: int = 0
+    reason: Literal["grounding", "quality", "unfiled"] | None = None
+    detail: str | None = None
+    figures: tuple[str, ...] = ()
+
+
+class PriorSession(Frozen):
+    """One earlier session's measurements, without the symbol repeated on every row."""
+
+    session_date: str
+    close: float | None = None
+    one_day: float | None = None
+    realised_volatility_20d: float | None = None
+    volume_vs_20_day: float | None = None
+    drawdown_from_52_week_high: float | None = None
+
+    @classmethod
+    def of(cls, signals: Signals) -> "PriorSession":
+        return cls(
+            session_date=signals.session_date.isoformat(),
+            close=signals.close,
+            one_day=signals.returns.one_day,
+            realised_volatility_20d=signals.realised_volatility_20d,
+            volume_vs_20_day=signals.volume_vs_20_day,
+            drawdown_from_52_week_high=signals.drawdown_from_52_week_high,
+        )
+
+
+class Recollection(Frozen):
+    symbol: str
+    sessions: tuple[PriorSession, ...] = ()
+    open_items: tuple[RecalledClaim, ...] = ()

@@ -10,7 +10,6 @@ from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from typing import Final
 
-import httpx
 import uvicorn
 from openai import AsyncOpenAI
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
@@ -18,18 +17,13 @@ from pydantic import BaseModel, ConfigDict
 
 from orient.config import Settings
 from orient.llm.chat import ProxyChat
-from orient.llm.embeddings import EmbeddingClient
 from orient.llm.limiter import RateLimiter
 from orient.orchestrator import telemetry
 from orient.orchestrator.app import create_app
 from orient.orchestrator.deps import RunDeps
-from orient.orchestrator.skills import Skills
 from orient.orchestrator.tools import connect
-from orient.store.claims import ClaimRepository
-from orient.store.instruments import InstrumentRepository
+from orient.skills.loader import Skills
 from orient.store.pool import create_pool
-from orient.store.runs import RunRepository
-from orient.store.sessions import SessionRepository
 from orient.store.summaries import SummaryRepository
 
 SERVICE_NAME: Final = "orient-orchestrator"
@@ -56,12 +50,9 @@ def parse(argv: list[str]) -> Options:
 @asynccontextmanager
 async def build(settings: Settings) -> AsyncGenerator[RunDeps, None]:
     pool: Final = create_pool(settings.database_url)
-    auth: Final = {"Authorization": f"Bearer {settings.proxy_api_key}"}
-    timeout: Final = httpx.Timeout(settings.request_timeout_seconds)
     limiter: Final = RateLimiter(settings.requests_per_minute)
 
     async with (
-        httpx.AsyncClient(base_url=settings.proxy_base_url, headers=auth, timeout=timeout) as proxy,
         AsyncOpenAI(
             base_url=f"{settings.proxy_base_url}/v1",
             api_key=settings.proxy_api_key,
@@ -76,12 +67,7 @@ async def build(settings: Settings) -> AsyncGenerator[RunDeps, None]:
                 chat=ProxyChat(openai, limiter, telemetry.outgoing),
                 tools=tools,
                 skills=Skills(),
-                embeddings=EmbeddingClient(proxy, settings.embedding_model, settings.embedding_dimensions),
-                instruments=InstrumentRepository(pool),
-                sessions=SessionRepository(pool),
                 summaries=SummaryRepository(pool),
-                claims=ClaimRepository(pool),
-                runs=RunRepository(pool),
                 trace_id=telemetry.current_trace_id,
                 span=telemetry.span,
             )
