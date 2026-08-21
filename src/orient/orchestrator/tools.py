@@ -20,6 +20,7 @@ from mcp.types import CallToolResult, TextContent, Tool
 from pydantic import TypeAdapter, ValidationError
 
 from mcp import Client
+from orient import correlation
 from orient.llm.chat import ToolSchema
 
 DETAIL_LENGTH: Final = 300
@@ -49,7 +50,7 @@ Outcome = Succeeded | Refused
 class ToolCatalog(Protocol):
     def schemas(self) -> tuple[ToolSchema, ...]: ...
 
-    async def execute(self, name: str, arguments: str) -> Outcome: ...
+    async def execute(self, name: str, arguments: str, session: str | None = None) -> Outcome: ...
 
 
 def _one_line(text: str) -> str:
@@ -79,7 +80,7 @@ class McpTools:
     def schemas(self) -> tuple[ToolSchema, ...]:
         return self._schemas
 
-    async def execute(self, name: str, arguments: str) -> Outcome:
+    async def execute(self, name: str, arguments: str, session: str | None = None) -> Outcome:
         if name not in self._served:
             return Refused(tool=name, detail=f"no such tool; served are {sorted(self._served)}")
 
@@ -89,7 +90,7 @@ class McpTools:
             return Refused(tool=name, detail=f"arguments were not a JSON object: {_one_line(arguments)}")
 
         try:
-            result = await self._client.call_tool(name, parsed)
+            result = await self._client.call_tool(name, parsed, meta=correlation.carried(session))
         except Exception as exc:  # noqa: BLE001  # one failed tool is not a reason to end the run
             return Refused(tool=name, detail=f"{type(exc).__name__}: {_one_line(str(exc))}")
 

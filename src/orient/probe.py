@@ -27,7 +27,7 @@ from orient.providers.protocols import Prices, Series
 from orient.providers.yahoo import YahooPrices
 
 TIMEOUT: Final = httpx.Timeout(30.0)
-REQUIRED_GUARDRAILS: Final = frozenset({"headroom-compression", "quality-judge", "tool-permission-guardrail"})
+REQUIRED_GUARDRAILS: Final = frozenset({"headroom-compression", "quality-judge", "tool-budget"})
 EXPECTED_TABLES: Final = frozenset({"instruments", "bars", "sessions", "summaries", "claims"})
 PROXY_SERVICE_NAME: Final = "litellm-proxy"
 LITELLM_TABLE_PREFIX: Final = "LiteLLM_"
@@ -370,6 +370,11 @@ def check_search(deps: Deps) -> CheckResult:
 
 
 def check_headroom(deps: Deps) -> CheckResult:
+    """The sidecar the compression guardrail calls.
+
+    The guardrail fails open, so a sidecar that is down costs every run its compression and says
+    nothing about it anywhere. This is the only place that notices.
+    """
     name: Final = "headroom sidecar"
     try:
         response = deps.headroom.post(

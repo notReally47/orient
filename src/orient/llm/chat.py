@@ -105,6 +105,8 @@ class ChatModel(Protocol):
         tools: Sequence[ToolSchema] = (),
         guardrails: Sequence[str] = (),
         schema: Mapping[str, object] | None = None,
+        tags: Sequence[str] = (),
+        session: str | None = None,
     ) -> Completion: ...
 
 
@@ -173,6 +175,23 @@ def _one_line(text: str, limit: int) -> str:
 Headers = Callable[[], Mapping[str, str]]
 
 
+def _extras(guardrails: Sequence[str], tags: Sequence[str], session: str | None) -> dict[str, object] | None:
+    """Guardrails, tags and the session ride in the body rather than as SDK arguments.
+
+    `litellm_session_id` is what the dashboard groups a conversation by, so every call of one run
+    carrying the same value turns a wall of rows into one filterable session. Tags describe what
+    a call was, and are the dimension `LiteLLM_DailyTagSpend` aggregates.
+    """
+    body: Final[dict[str, object]] = {}
+    if guardrails:
+        body["guardrails"] = list(guardrails)
+    if tags:
+        body["metadata"] = {"tags": list(tags)}
+    if session:
+        body["litellm_session_id"] = session
+    return body or None
+
+
 class ProxyChat:
     """Every call goes through the proxy, which is what puts it in one spend and trace record.
 
@@ -193,6 +212,8 @@ class ProxyChat:
         tools: Sequence[ToolSchema] = (),
         guardrails: Sequence[str] = (),
         schema: Mapping[str, object] | None = None,
+        tags: Sequence[str] = (),
+        session: str | None = None,
     ) -> Completion:
         await self._limiter.acquire()
         try:
@@ -202,7 +223,7 @@ class ProxyChat:
                 tools=[_as_tool(entry) for entry in tools] if tools else omit,
                 response_format=omit if schema is None else _json_schema(schema),
                 extra_headers=dict(self._headers()),
-                extra_body={"guardrails": list(guardrails)} if guardrails else None,
+                extra_body=_extras(guardrails, tags, session),
             )
         except APIStatusError as exc:
             if exc.status_code == GUARDRAIL_BLOCKED:

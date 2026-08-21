@@ -145,12 +145,14 @@ def as_catalog(listings: Sequence[Listing]) -> str:
 
 
 def as_activation(body: Body) -> str:
-    """Tier 2 wrapped so the model can tell instructions from conversation, per the spec."""
-    listing: Final = (
-        "\n<skill_resources>\n"
-        + "\n".join(f"  <file>{path}</file>" for path in body.resources)
-        + "\n</skill_resources>"
-        if body.resources
-        else ""
-    )
-    return f'<skill_content name="{body.name}">\n{body.body}\n{listing}\n</skill_content>'
+    """Tier 2: the instructions, introduced by a marker rather than enclosed in one.
+
+    The markers are self-closing because the proxy's compression sidecar protects the contents of
+    every custom XML element it finds. Instructions wrapped in `<skill_content>...</skill_content>`
+    are the one part of a transcript that can never be compressed, while the same instructions
+    announced by `<skill name="..."/>` read identically to the model and shrink like any other
+    prose. The tier-1 catalog keeps the enclosing shape, because it rides in the system message
+    and no compressor is allowed to touch that.
+    """
+    listing: Final = ("\n\n<skill_resources/>\n" + "\n".join(body.resources)) if body.resources else ""
+    return f'<skill name="{body.name}"/>\n\n{body.body}{listing}'

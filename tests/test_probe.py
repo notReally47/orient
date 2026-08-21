@@ -160,7 +160,7 @@ def test_guardrails_pass_when_every_required_one_is_loaded() -> None:
         "guardrails": [
             {"guardrail_name": "headroom-compression"},
             {"guardrail_name": "quality-judge"},
-            {"guardrail_name": "tool-permission-guardrail"},
+            {"guardrail_name": "tool-budget"},
         ]
     }
     assert isinstance(check_guardrails(_deps(_json_handler(payload))), Passed)

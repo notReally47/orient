@@ -3,8 +3,10 @@
 from typing import Annotated
 
 from mcp.server import MCPServer
+from mcp.server.mcpserver.context import Context
 from pydantic import Field
 
+from orient import correlation
 from orient.domain.market import NewsFindings
 from orient.llm.research import MAX_QUESTIONS
 from orient.mcp.deps import ToolDeps
@@ -24,6 +26,7 @@ def register(server: MCPServer, deps: ToolDeps) -> None:
                 max_length=MAX_QUESTIONS,
             ),
         ],
+        context: Context,
     ) -> NewsFindings:
         """Answer several questions about a move from recent news, in one call.
 
@@ -35,6 +38,6 @@ def register(server: MCPServer, deps: ToolDeps) -> None:
         explain a move; never quote a figure out of it, because no figure in here was measured and
         the grounding check will reject it.
         """
-        return await deps.research.investigate(questions)
+        return await deps.research.investigate(questions, correlation.of(context))
 
     _ = search_news

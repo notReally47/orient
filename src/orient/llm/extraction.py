@@ -51,4 +51,3 @@ def parse(text: str) -> Extraction:
         return _ADAPTER.validate_json(_unfenced(text))
     except ValidationError:
         return Extraction()
-

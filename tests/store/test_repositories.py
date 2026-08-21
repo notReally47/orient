@@ -194,7 +194,7 @@ async def test_adding_claims_wraps_each_vector_and_flattens_the_symbol_tuple() -
 async def test_upserting_an_instrument_sends_every_column() -> None:
     instrument: Final = Instrument(symbol="AAPL", asset_class="equity", name="Apple Inc.")
     pool: Final = FakePool()
-    await InstrumentRepository(as_pool(pool)).upsert(instrument)
+    await InstrumentRepository(as_pool(pool)).add(instrument)
 
     assert pool.only.parameters == instrument.model_dump()
 

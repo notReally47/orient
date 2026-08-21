@@ -52,6 +52,12 @@ def brief(subject: Subject) -> str:
     )
 
 
+def blocked(detail: str) -> str:
+    """A guardrail turned the turn away. Which guardrail is in the detail, so it is passed on
+    verbatim rather than described, and the model reads what the policy actually said."""
+    return f"That turn was refused by a policy on this proxy:\n{detail}\n\nAdjust and continue."
+
+
 def revise(reason: Rejection, detail: str) -> str:
     match reason:
         case "grounding":

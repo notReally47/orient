@@ -10,7 +10,13 @@ from typing import Final
 import httpx
 from pydantic import BaseModel, ConfigDict
 
+from orient import correlation
+
 Vectors = tuple[tuple[float, ...], ...]
+
+# An embeddings row reports its tokens but not what asked for them. The tag is what
+# separates their spend from the completions beside it in the same run.
+TAGS: Final = ("phase:embed",)
 
 
 class _Entry(BaseModel):
@@ -36,12 +42,12 @@ class EmbeddingClient:
         self._model: Final = model
         self._dimensions: Final = dimensions
 
-    async def embed(self, texts: Sequence[str]) -> Vectors:
+    async def embed(self, texts: Sequence[str], session: str | None = None) -> Vectors:
         if not texts:
             return ()
 
         request: Final = {"model": self._model, "input": list(texts), "dimensions": self._dimensions}
-        response: Final = await self._client.post("/v1/embeddings", json=request)
+        response: Final = await self._client.post("/v1/embeddings", json=request, headers=correlation.headers(session))
         if not response.is_success:
             message = f"embeddings returned HTTP {response.status_code}: {response.text[:200]}"
             raise EmbeddingError(message)

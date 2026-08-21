@@ -9,9 +9,21 @@ from typing import Final
 import httpx
 from pydantic import BaseModel, ConfigDict, Field
 
+from orient import correlation
 from orient.domain.market import NewsArticle
 
 DEFAULT_RESULTS: Final = 5
+
+# A search is not a completion, so its spend row carries no tokens and would otherwise be
+# indistinguishable from anyone else's. Headers are the only way to label a non-chat endpoint:
+# these say what kind of call it was, and the session header says which run it belonged to.
+TAGS: Final = ("phase:research",)
+
+# One of Exa's own categories, forwarded by the proxy alongside the parameters it defines itself.
+# Unrestricted, a question about a session returns the instrument's own landing pages and undated
+# explainers as readily as reporting, and a reader given those correctly answers that the articles
+# do not say. Asked for news, the same question comes back with same-day reporting about the move.
+CATEGORY: Final = "news"
 
 
 class _Result(BaseModel):
@@ -53,10 +65,16 @@ class SearchClient:
         self._client: Final = client
         self._tool_name: Final = tool_name
 
-    async def news(self, query: str, count: int = DEFAULT_RESULTS) -> tuple[NewsArticle, ...]:
+    async def news(
+        self,
+        query: str,
+        count: int = DEFAULT_RESULTS,
+        session: str | None = None,
+    ) -> tuple[NewsArticle, ...]:
         response: Final = await self._client.post(
             f"/v1/search/{self._tool_name}",
-            json={"query": query, "max_results": count},
+            json={"query": query, "max_results": count, "category": CATEGORY},
+            headers={"x-litellm-tags": ",".join(TAGS), **correlation.headers(session)},
         )
         if not response.is_success:
             message = f"search returned HTTP {response.status_code}: {response.text[:200]}"
@@ -75,11 +93,17 @@ class SearchClient:
         )
 
 
-SNIPPET_LENGTH: Final = 1200
+SNIPPET_LENGTH: Final = 600
 
 
 def _snippet(entry: _Result) -> str | None:
-    """Article bodies run to thousands of words. Only the opening travels, and it goes to the
-    fast model to be read rather than to the writer, so it can afford to be longer than a quote."""
+    """Article bodies run to thousands of words, and only the opening travels.
+
+    The length is set by what the reader can hold rather than by what an article contains. Six
+    questions returning five articles each is thirty openings in one prompt, and measured against
+    the fast model the same articles answer every question at this length and start coming back
+    as "the articles do not say" at twice it. The answer is in the lede either way: what is lost
+    beyond the first few hundred characters is background, not the cause of a session's move.
+    """
     body: Final = entry.snippet or entry.text
     return None if body is None else body[:SNIPPET_LENGTH]

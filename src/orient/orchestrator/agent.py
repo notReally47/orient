@@ -12,7 +12,6 @@ Nothing here raises at the caller. Every way a run can end, cancellation and an 
 included, is a value the caller receives as an event.
 """
 
-from collections import Counter
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date
@@ -55,16 +54,13 @@ from orient.skills.loader import as_catalog
 
 Cancelled = Callable[[], Awaitable[bool]]
 
-# A tool a model can call without limit is a tool it can spiral on, and the proxy's permission
-# guardrail matches patterns per request rather than counting across a run, so the count has to
-# be kept here where the run's state already lives.
 SAVE_TOOL: Final = "save_summary"
 ACTIVATE_TOOL: Final = "activate_skill"
 RESOURCE_TOOL: Final = "read_skill_resource"
 
 # Quality review happens inside `save_summary`, because a summary travels as a tool-call
 # argument and the proxy's post-call judge only ever sees assistant text.
-GUARDRAILS: Final = ("headroom-compression", "tool-permission-guardrail")
+GUARDRAILS: Final = ("headroom-compression", "tool-budget")
 
 _JSON: Final = TypeAdapter(dict[str, object])
 
@@ -112,7 +108,13 @@ class _Run:
         self._emit: Final = emit
         self._cancelled: Final = cancelled
         self._id: Final = deps.new_id()
-        self._spent: Final[Counter[str]] = Counter()
+        self._session: Final = str(self._id)
+        self._tags: Final = (
+            f"symbol:{request.symbol}",
+            f"session:{request.session_date:%Y-%m-%d}",
+            f"level:{request.level}",
+            "phase:agent",
+        )
 
     async def execute(self) -> None:
         await self._emit(
@@ -179,12 +181,14 @@ class _Run:
                 messages=transcript,
                 tools=self._deps.tools.schemas(),
                 guardrails=GUARDRAILS,
+                tags=self._tags,
+                session=self._session,
             )
             match answer:
                 case Unavailable():
                     return _Stopped(status="failed", detail=answer.detail)
                 case Rejected():
-                    transcript = (*transcript, UserMessage(content=prompts.revise("judge", answer.feedback)))
+                    transcript = (*transcript, UserMessage(content=prompts.blocked(answer.feedback)))
                     continue
                 case Answered():
                     pass
@@ -235,20 +239,8 @@ class _Run:
 
     async def _call(self, name: str, arguments: str) -> Succeeded | Refused:
         await self._emit(ToolStarted(tool=name, arguments=arguments[:ARGUMENT_PREVIEW]))
-        budget: Final = self._deps.settings.max_calls_per_tool
-        self._spent[name] += 1
-        if name != SAVE_TOOL and self._spent[name] > budget:
-            spent = Refused(
-                tool=name,
-                detail=(
-                    f"{name} has already been called {budget} times in this run, which is its limit. "
-                    "Work with what it returned, or use a different tool."
-                ),
-            )
-            await self._emit(ToolFinished(tool=name, ok=False, detail=spent.detail))
-            return spent
         with self._deps.span(f"tool.{name}"):
-            outcome = await self._deps.tools.execute(name, arguments)
+            outcome = await self._deps.tools.execute(name, arguments, self._session)
         match outcome:
             case Succeeded():
                 await self._emit(ToolFinished(tool=name, ok=True, detail=f"{len(outcome.payload)} characters"))

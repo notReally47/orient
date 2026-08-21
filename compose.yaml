@@ -29,14 +29,17 @@ services:
       timeout: 5s
       retries: 12
 
+  # The compression sidecar the proxy's headroom guardrail calls. The published tags are ahead of
+  # what they contain: this one reports 0.5.25 from /health, and the releases numbered above it
+  # compress prose not at all, so the tag is pinned rather than tracked.
+  #
+  # No environment is set because none of it reaches this build. Everything that shapes how much
+  # is compressed -- the acceptance floor, the keep ratio, whether tagged content is exempt -- is
+  # either hard-coded here or reachable only through a per-request body the proxy's guardrail
+  # never sends.
   headroom:
     image: ghcr.io/chopratejas/headroom:0.6.7
     command: [ "--port", "8787", "--host", "0.0.0.0" ]
-    environment:
-      HEADROOM_COMPRESS_USER_MESSAGES: "1"
-      HEADROOM_COMPRESS_ALLOW_REMOTE: "1"
-      HEADROOM_OUTPUT_SHAPER: "${HEADROOM_OUTPUT_SHAPER:-1}"
-      HEADROOM_UPDATE_CHECK: "off"
     ports:
       - "8787:8787"
 
@@ -69,7 +72,7 @@ services:
         condition: service_healthy
       mcp:
         condition: service_healthy
-    command: [ "--config", "/app/config.yaml", "--port", "4000", "--detailed_debug", "--use_v2_migration_resolver" ]
+    command: [ "--config", "/app/proxy/config.yaml", "--port", "4000", "--detailed_debug", "--use_v2_migration_resolver" ]
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-market}:${POSTGRES_PASSWORD:-market}@db:5432/litellm
       LITELLM_MASTER_KEY: ${LITELLM_MASTER_KEY:?set LITELLM_MASTER_KEY in .env}
@@ -84,12 +87,22 @@ services:
       GEMINI_API_KEY_6: ${GEMINI_API_KEY_6:?set GEMINI_API_KEY_6 in .env}
       EXA_API_KEY: ${EXA_API_KEY:?set EXA_API_KEY in .env}
       HEADROOM_API_BASE: http://headroom:8787
+      # Every string in a stored request longer than this is replaced by a note saying how much
+      # was dropped, which is why a tool result read back in the dashboard appears to stop
+      # mid-sentence. The default of 2048 truncates a skill body and most tool results, leaving
+      # the log unable to show what a turn was actually given.
+      MAX_STRING_LENGTH_PROMPT_IN_DB: "32768"
       LITELLM_OTEL_V2: "true"
       OTEL_EXPORTER: otlp_http
       OTEL_ENDPOINT: http://jaeger:4318
       OTEL_SERVICE_NAME: litellm-proxy
     volumes:
-      - ./proxy/config.yaml:/app/config.yaml:ro,z
+      # The whole directory, because config.yaml pulls the model and guardrail lists in with
+      # `include:` and those paths resolve next to it. The guardrail module is mounted a second
+      # time at the image root, where it is importable as `custom_guardrail`, which is the name
+      # the guardrail config loads it by.
+      - ./proxy:/app/proxy:ro,z
+      - ./proxy/custom_guardrail.py:/app/custom_guardrail.py:ro,z
     ports:
       - "4000:4000"
 
@@ -114,8 +127,7 @@ services:
       MS_EMBEDDING_MODEL: ${MS_EMBEDDING_MODEL:-embedding-model}
       MS_EMBEDDING_DIMENSIONS: ${MS_EMBEDDING_DIMENSIONS:-1536}
       MS_REQUESTS_PER_MINUTE: ${MS_REQUESTS_PER_MINUTE:-15}
-      MS_GATHER_MAX_ITERATIONS: ${MS_GATHER_MAX_ITERATIONS:-6}
-      MS_REVISE_MAX_ATTEMPTS: ${MS_REVISE_MAX_ATTEMPTS:-2}
+      MS_MAX_TURNS: ${MS_MAX_TURNS:-12}
     ports:
       - "8000:8000"
 

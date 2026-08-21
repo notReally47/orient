@@ -61,6 +61,11 @@ the day's economic release actually said, whether a move that looks large for th
 part of something wider. Ask full questions with the date in them. "Why did semiconductor stocks
 fall on 13 August 2026" beats "NVDA".
 
+One subject per question. Two joined by "and" are searched as one phrase, so a question about
+real estate and consumer staples finds articles about neither. Name the market as well as the
+sector: "real estate" on its own returns house prices and housing policy, while "the real estate
+sector of the S&P 500" returns the session.
+
 What comes back is somebody's claim about the market. Attribute it that way, and never quote a
 figure out of it: the numbers you may use are the ones the other tools measured, and the grounding
 check will reject anything else.

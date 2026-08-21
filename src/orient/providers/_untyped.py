@@ -21,6 +21,9 @@ Records = Sequence[Mapping[str, object]]
 NestedRecords = Sequence[Mapping[tuple[str, str], object]]
 
 DATE_KEY: Final = ("Date", "")
+
+# What Yahoo says when the crumb it was handed is no longer one it will accept.
+_CRUMB_REJECTED: Final = "Invalid Crumb"
 _ONE_DAY: Final = timedelta(days=1)
 
 
@@ -317,11 +320,30 @@ def yahoo_option_calls(symbol: str, expiry: str) -> Records:
     )
 
 
+def _calendar_frame(start: date, end: date, surface: str) -> "_Frame":
+    """One calendar surface, re-minting Yahoo's crumb if the cached one has been rejected.
+
+    Yahoo guards the calendar endpoints with a crumb token fetched once and held on a
+    process-wide singleton. yfinance reuses it for the life of the process and clears it only
+    when login state changes, so a crumb Yahoo later rejects is never replaced: a long-running
+    server answers "Invalid Crumb" for every calendar call from the first failure until it is
+    restarted, while the price endpoints, which need no crumb, keep working.
+
+    Dropping the cached token and asking once more turns that permanent outage back into the
+    transient one it actually is.
+    """
+    try:
+        return cast("_Frame", getattr(yf.Calendars(start, end), surface))  # pyright: ignore[reportAny]  # no stubs
+    except Exception as exc:
+        if _CRUMB_REJECTED not in str(exc):
+            raise
+        # The singleton exposes no way to invalidate the token it is holding.
+        yf.data.YfData()._crumb = None  # noqa: SLF001  # pyright: ignore[reportPrivateUsage]
+        return cast("_Frame", getattr(yf.Calendars(start, end), surface))  # pyright: ignore[reportAny]  # no stubs
+
+
 def yahoo_earnings_calendar(start: date, end: date) -> Records:
-    frame: Final = cast(
-        "_Frame",
-        yf.Calendars(start, end).earnings_calendar,  # pyright: ignore[reportUnknownMemberType]  # no stubs
-    )
+    frame: Final = _calendar_frame(start, end, "earnings_calendar")
     return tuple(
         {
             "symbol": row.get("Symbol"),
@@ -336,10 +358,7 @@ def yahoo_earnings_calendar(start: date, end: date) -> Records:
 
 
 def yahoo_economic_calendar(start: date, end: date) -> Records:
-    frame: Final = cast(
-        "_Frame",
-        yf.Calendars(start, end).economic_events_calendar,  # pyright: ignore[reportUnknownMemberType]  # no stubs
-    )
+    frame: Final = _calendar_frame(start, end, "economic_events_calendar")
     return tuple(
         {
             "event": row.get("Event"),
@@ -355,10 +374,7 @@ def yahoo_economic_calendar(start: date, end: date) -> Records:
 
 
 def yahoo_ipo_calendar(start: date, end: date) -> Records:
-    frame: Final = cast(
-        "_Frame",
-        yf.Calendars(start, end).ipo_info_calendar,  # pyright: ignore[reportUnknownMemberType]  # no stubs
-    )
+    frame: Final = _calendar_frame(start, end, "ipo_info_calendar")
     return tuple(
         {
             "symbol": row.get("Symbol"),
@@ -373,10 +389,7 @@ def yahoo_ipo_calendar(start: date, end: date) -> Records:
 
 
 def yahoo_splits_calendar(start: date, end: date) -> Records:
-    frame: Final = cast(
-        "_Frame",
-        yf.Calendars(start, end).splits_calendar,  # pyright: ignore[reportUnknownMemberType]  # no stubs
-    )
+    frame: Final = _calendar_frame(start, end, "splits_calendar")
     return tuple(
         {
             "symbol": row.get("Symbol"),

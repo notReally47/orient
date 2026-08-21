@@ -7,6 +7,7 @@ read rather than an exception somebody remembered to catch.
 """
 
 from dataclasses import replace
+from datetime import date
 from typing import Final, cast
 
 import httpx
@@ -15,6 +16,7 @@ from mcp.types import CallToolResult, TextContent
 from pydantic import TypeAdapter
 
 from mcp import Client
+from orient.domain.models import Calendar
 from orient.llm.judge import JudgeClient
 from orient.mcp.server import create_server
 from tests.mcp.fakes import TODAY, tool_deps
@@ -157,9 +159,10 @@ async def test_a_summary_the_reviewer_turns_down_is_refused() -> None:
             return httpx.Response(422, json={"error": {"message": "compliance: it forecasts a price"}})
         return httpx.Response(200, json={"data": [{"index": 0, "embedding": [0.1] * 4}]})
 
-    async with tool_deps() as deps, httpx.AsyncClient(
-        transport=httpx.MockTransport(blocking), base_url="http://proxy"
-    ) as client:
+    async with (
+        tool_deps() as deps,
+        httpx.AsyncClient(transport=httpx.MockTransport(blocking), base_url="http://proxy") as client,
+    ):
         strict = replace(deps, judge=JudgeClient(client, "quality-judge"))
         async with Client(create_server(strict)) as mcp:
             result = await mcp.call_tool(
@@ -176,3 +179,53 @@ async def test_a_summary_the_reviewer_turns_down_is_refused() -> None:
     assert refused["outcome"] == "refused"
     assert refused["reason"] == "quality"
     assert "forecasts a price" in str(refused["detail"])
+
+
+async def test_a_dead_vendor_surface_costs_its_evidence_and_not_the_summary() -> None:
+    """A live run lost every summary because Yahoo's calendar rejected a stale crumb while its
+    prices answered normally. One surface being down must narrow what may be quoted, not stop
+    the writing."""
+
+    class _Broken:
+        async def entries(self, start: date, end: date, kinds: object = None) -> Calendar:
+            del start, end, kinds
+            message = "Invalid Crumb"
+            raise RuntimeError(message)
+
+    async with tool_deps() as deps, Client(create_server(replace(deps, calendars=_Broken()))) as client:
+        result = await client.call_tool(
+            "save_summary",
+            {
+                "symbol": SYMBOL,
+                "session_date": TODAY.isoformat(),
+                "level": "beginner",
+                "markdown": GROUNDED,
+            },
+        )
+
+    saved: Final = _payload(result)
+    assert saved["outcome"] == "saved"
+
+
+async def test_the_calls_a_save_makes_are_filed_under_the_run_that_asked_for_it() -> None:
+    """Storing a summary costs three further proxy calls: the review, the extraction and the
+    embeddings. Each is billed, and without the run's session each appears in the dashboard as a
+    row belonging to nothing."""
+    seen: Final[list[httpx.Request]] = []
+
+    async with tool_deps(seen=seen) as deps, Client(create_server(deps)) as client:
+        result = await client.call_tool(
+            "save_summary",
+            {
+                "symbol": SYMBOL,
+                "session_date": TODAY.isoformat(),
+                "level": "beginner",
+                "markdown": GROUNDED,
+            },
+            meta={"orient/session": "run-9"},
+        )
+
+    assert _payload(result)["outcome"] == "saved"
+    reached: Final = {request.url.path for request in seen}
+    assert "/guardrails/apply_guardrail" in reached
+    assert {dict(request.headers).get("x-litellm-session-id") for request in seen} == {"run-9"}

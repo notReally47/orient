@@ -4,6 +4,7 @@ The unit under test is the round-trip arithmetic. Six questions must cost one ca
 model, not six, because the provider's daily budget is counted in requests.
 """
 
+import json
 from collections.abc import Mapping, Sequence
 from typing import Final
 
@@ -27,6 +28,7 @@ SYNTHESIS: Final = "Reuters reported that wholesale inflation cooled."
 class _Chat:
     def __init__(self, answer: Completion | None = None) -> None:
         self.calls: Final[list[tuple[str, str]]] = []
+        self.sessions: Final[list[str | None]] = []
         self._answer: Final = answer or Answered(message=AssistantMessage(content=SYNTHESIS), spend=Spend())
 
     async def complete(
@@ -36,8 +38,11 @@ class _Chat:
         tools: Sequence[ToolSchema] = (),
         guardrails: Sequence[str] = (),
         schema: Mapping[str, object] | None = None,
+        tags: Sequence[str] = (),
+        session: str | None = None,
     ) -> Completion:
-        del tools, guardrails, schema
+        del tools, guardrails, schema, tags
+        self.sessions.append(session)
         self.calls.append((model, " ".join(message.content for message in messages)))
         return self._answer
 
@@ -140,3 +145,51 @@ async def test_a_source_carries_no_url() -> None:
     findings: Final = await Researcher(_searching(searched), _Chat(), "fast-model").investigate(("why",))
 
     assert not hasattr(findings.sources[0], "url")
+
+
+async def test_a_search_is_tagged_so_its_spend_row_can_be_found() -> None:
+    """Exa bills per query and reports no tokens, so without a tag its row is a bare 0.005 that
+    cannot be attributed to anything."""
+    seen: Final[list[str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(dict(request.headers).get("x-litellm-tags", ""))
+        return httpx.Response(200, json={"results": []})
+
+    client: Final = httpx.AsyncClient(transport=httpx.MockTransport(handler), base_url="http://proxy")
+    _ = await SearchClient(client, "exa-search").news("why", 3)
+
+    assert seen == ["phase:research"]
+
+
+async def test_the_run_travels_with_both_halves_of_a_research_call() -> None:
+    """Searching and reading are two billed calls on two different endpoints. Grouping only one
+    of them leaves the other beside the run in the dashboard rather than inside it."""
+    seen: Final[list[str | None]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(dict(request.headers).get("x-litellm-session-id"))
+        return httpx.Response(200, json={"results": [{"title": "t", "url": "https://a.test"}]})
+
+    client: Final = httpx.AsyncClient(transport=httpx.MockTransport(handler), base_url="http://proxy")
+    chat: Final = _Chat()
+
+    _ = await Researcher(SearchClient(client, "exa-search"), chat, "fast-model").investigate(("why",), "run-7")
+
+    assert seen == ["run-7"]
+    assert chat.sessions == ["run-7"]
+
+
+async def test_a_search_asks_for_news_rather_than_whatever_matches() -> None:
+    """Unrestricted, the provider answers a question about a session with the instrument's own
+    landing pages, which a reader correctly reports as not answering the question."""
+    asked: Final[list[str]] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        asked.append(request.content.decode())
+        return httpx.Response(200, json={"results": []})
+
+    client: Final = httpx.AsyncClient(transport=httpx.MockTransport(handler), base_url="http://proxy")
+    _ = await SearchClient(client, "exa-search").news("why did it fall", 3)
+
+    assert json.loads(asked[0])["category"] == "news"

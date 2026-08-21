@@ -8,8 +8,10 @@ previous summary asserted, which is the part no aggregation can reconstruct.
 from typing import Annotated, Final
 
 from mcp.server import MCPServer
+from mcp.server.mcpserver.context import Context
 from pydantic import Field
 
+from orient import correlation
 from orient.domain.models import SIGNALS_VERSION
 from orient.mcp.deps import ToolDeps
 from orient.mcp.results import KnowledgeResults, PriorSession, RecalledClaim, Recollection
@@ -52,13 +54,15 @@ def register(server: MCPServer, deps: ToolDeps) -> None:
             Field(description="Restrict to claims about this symbol or that mention it. All symbols when unset"),
         ] = None,
         limit: Annotated[int, Field(description="Most claims to return", ge=1, le=MAX_CLAIMS)] = 10,
+        *,
+        context: Context,
     ) -> KnowledgeResults:
         """Find earlier claims that resemble the situation in front of you now.
 
         This is for cross-time analogy, when you want to know when a situation last looked like
         this one. For recent history and open expectations, use `recall_history` instead.
         """
-        vectors = await deps.embeddings.embed([query])
+        vectors = await deps.embeddings.embed([query], correlation.of(context))
         if not vectors:
             return KnowledgeResults(query=query)
         claims = await deps.claims.similar(vectors[0], symbol=symbol, limit=limit)

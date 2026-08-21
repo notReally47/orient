@@ -18,7 +18,13 @@ from typing import Final
 import httpx
 from pydantic import BaseModel, ConfigDict
 
+from orient import correlation
+
 APPLY_PATH: Final = "/guardrails/apply_guardrail"
+
+# The review is a model call the proxy bills to whoever asked for it, and this is what
+# tells it apart from the run's own turns in the spend records.
+TAGS: Final = ("phase:review",)
 BLOCKED: Final = (400, 422)
 DETAIL_LENGTH: Final = 1200
 
@@ -59,13 +65,14 @@ class JudgeClient:
         self._client: Final = client
         self._guardrail: Final = guardrail
 
-    async def review(self, prose: str) -> Verdict:
+    async def review(self, prose: str, session: str | None = None) -> Verdict:
         if not prose.strip():
             return Passed()
         try:
             response = await self._client.post(
                 APPLY_PATH,
                 json={"guardrail_name": self._guardrail, "text": prose, "language": "en"},
+                headers={"x-litellm-tags": ",".join(TAGS), **correlation.headers(session)},
             )
         except httpx.HTTPError:
             return Passed()

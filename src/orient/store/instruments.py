@@ -26,9 +26,12 @@ class InstrumentRepository:
     def __init__(self, pool: Pool) -> None:
         self._pool: Final = pool
 
-    async def upsert(self, instrument: Instrument) -> None:
-        """Insert-once. Sector and name are mutable at the vendor, and rewriting them would move
-        the reference data an already published summary was written against."""
+    async def add(self, instrument: Instrument) -> None:
+        """The first description of an instrument wins, and later ones are discarded.
+
+        Name and sector are mutable at the vendor. Taking a new one would move the reference
+        data an already published summary was written against, so a symbol already on file is
+        left as it is rather than updated."""
         async with self._pool.connection() as connection:
             _ = await connection.execute(_UPSERT, instrument.model_dump())
 

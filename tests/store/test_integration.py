@@ -83,15 +83,14 @@ async def symbol(pool: Pool) -> AsyncIterator[str]:
         yield generated
     finally:
         async with pool.connection() as connection:
-            # instruments cascades to sessions, summaries and their claims; runs and bars stand alone.
-            _ = await connection.execute("DELETE FROM runs WHERE symbol = %s", (generated,))
+            # instruments cascades to sessions, summaries and their claims; bars stand alone.
             _ = await connection.execute("DELETE FROM bars WHERE symbol = %s", (generated,))
             _ = await connection.execute("DELETE FROM instruments WHERE symbol = %s", (generated,))
             _ = await connection.execute("DELETE FROM summaries WHERE symbol = %s", (generated,))
 
 
 async def _seed_instrument(pool: Pool, symbol: str) -> None:
-    await InstrumentRepository(pool).upsert(Instrument(symbol=symbol, asset_class="index", name="Integration fixture"))
+    await InstrumentRepository(pool).add(Instrument(symbol=symbol, asset_class="index", name="Integration fixture"))
 
 
 def _signals(symbol: str, session_date: date) -> Signals:
@@ -111,19 +110,21 @@ async def test_an_instrument_survives_a_round_trip(pool: Pool, symbol: str) -> N
         symbol=symbol, asset_class="equity", name="Round Trip Inc.", sector="Technology", currency="USD"
     )
 
-    await repository.upsert(instrument)
+    await repository.add(instrument)
 
     assert await repository.get(symbol) == instrument
 
 
-async def test_upserting_an_instrument_twice_updates_rather_than_conflicts(pool: Pool, symbol: str) -> None:
+async def test_writing_an_instrument_twice_keeps_the_description_already_on_file(pool: Pool, symbol: str) -> None:
+    """A published summary cites the name and sector that were on file when it was written, so
+    a later vendor rename must not reach back and change what it appears to have said."""
     repository: Final = InstrumentRepository(pool)
-    await repository.upsert(Instrument(symbol=symbol, asset_class="equity", name="Before"))
-    await repository.upsert(Instrument(symbol=symbol, asset_class="equity", name="After"))
+    await repository.add(Instrument(symbol=symbol, asset_class="equity", name="Before"))
+    await repository.add(Instrument(symbol=symbol, asset_class="equity", name="After"))
 
     stored: Final = await repository.get(symbol)
     assert stored is not None
-    assert stored.name == "After"
+    assert stored.name == "Before"
 
 
 def _bar(symbol_date: date, close: float) -> Bar:

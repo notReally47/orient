@@ -62,14 +62,14 @@ class Researcher:
         self._model: Final = model
         self._per_question: Final = per_question
 
-    async def investigate(self, questions: Sequence[str]) -> NewsFindings:
+    async def investigate(self, questions: Sequence[str], session: str | None = None) -> NewsFindings:
         asked: Final = tuple(dict.fromkeys(questions))[:MAX_QUESTIONS]
         results: Final[dict[str, tuple[NewsArticle, ...]]] = {}
         failed: Final[list[str]] = []
 
         async def one(question: str) -> None:
             try:
-                results[question] = await self._search.news(question, self._per_question)
+                results[question] = await self._search.news(question, self._per_question, session)
             except SearchError:
                 failed.append(question)
 
@@ -89,6 +89,8 @@ class Researcher:
         answer: Final = await self._chat.complete(
             model=self._model,
             messages=[SystemMessage(content=FRAMING), UserMessage(content=_prompt(asked, found))],
+            tags=("phase:research",),
+            session=session,
         )
         if not isinstance(answer, Answered):
             return NewsFindings(

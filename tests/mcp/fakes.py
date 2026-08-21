@@ -70,8 +70,10 @@ class _Synthesiser:
         tools: Sequence[ToolSchema] = (),
         guardrails: Sequence[str] = (),
         schema: Mapping[str, object] | None = None,
+        tags: Sequence[str] = (),
+        session: str | None = None,
     ) -> Completion:
-        del model, messages, tools, guardrails, schema
+        del model, messages, tools, guardrails, schema, tags, session
         return Answered(message=AssistantMessage(content=SYNTHESIS), spend=Spend())
 
 
@@ -255,9 +257,19 @@ def _proxy_handler(request: httpx.Request) -> httpx.Response:
 
 
 @asynccontextmanager
-async def tool_deps(pool: FakePool | None = None) -> AsyncGenerator[ToolDeps, None]:
+async def tool_deps(
+    pool: FakePool | None = None,
+    seen: list[httpx.Request] | None = None,
+) -> AsyncGenerator[ToolDeps, None]:
+    """`seen` collects every request that reached the proxy, for asserting what a call carried."""
     store: Final = pool if pool is not None else FakePool()
-    transport: Final = httpx.MockTransport(_proxy_handler)
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if seen is not None:
+            seen.append(request)
+        return _proxy_handler(request)
+
+    transport: Final = httpx.MockTransport(handler)
     async with httpx.AsyncClient(transport=transport, base_url="http://proxy") as client:
         prices = CachedPrices(_prices(), BarRepository(as_pool(store)))
         synthesiser = _Synthesiser()

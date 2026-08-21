@@ -1,0 +1,168 @@
+model_list:
+  - model_name: primary-model
+    litellm_params:
+      model: gemini/gemini-3.5-flash
+      api_key: os.environ/GEMINI_API_KEY
+      order: 1
+      cache_control_injection_points:
+        - location: message
+          role: system
+
+  - model_name: primary-model
+    litellm_params:
+      model: gemini/gemini-3.5-flash
+      api_key: os.environ/GEMINI_API_KEY_2
+      order: 2
+      cache_control_injection_points:
+        - location: message
+          role: system
+
+  - model_name: primary-model
+    litellm_params:
+      model: gemini/gemini-3.5-flash
+      api_key: os.environ/GEMINI_API_KEY_3
+      order: 3
+      cache_control_injection_points:
+        - location: message
+          role: system
+
+  - model_name: primary-model
+    litellm_params:
+      model: gemini/gemini-3.5-flash
+      api_key: os.environ/GEMINI_API_KEY_4
+      order: 4
+      cache_control_injection_points:
+        - location: message
+          role: system
+
+  - model_name: primary-model
+    litellm_params:
+      model: gemini/gemini-3.5-flash
+      api_key: os.environ/GEMINI_API_KEY_5
+      order: 5
+      cache_control_injection_points:
+        - location: message
+          role: system
+
+  - model_name: primary-model
+    litellm_params:
+      model: gemini/gemini-3.5-flash
+      api_key: os.environ/GEMINI_API_KEY_6
+      order: 6
+      cache_control_injection_points:
+        - location: message
+          role: system
+
+  - model_name: fast-model
+    litellm_params:
+      model: gemini/gemini-3.5-flash-lite
+      api_key: os.environ/GEMINI_API_KEY
+      order: 1
+
+  - model_name: fast-model
+    litellm_params:
+      model: gemini/gemini-3.5-flash-lite
+      api_key: os.environ/GEMINI_API_KEY_2
+      order: 2
+
+  - model_name: fast-model
+    litellm_params:
+      model: gemini/gemini-3.5-flash-lite
+      api_key: os.environ/GEMINI_API_KEY_3
+      order: 3
+
+  - model_name: fast-model
+    litellm_params:
+      model: gemini/gemini-3.5-flash-lite
+      api_key: os.environ/GEMINI_API_KEY_4
+      order: 4
+
+  - model_name: fast-model
+    litellm_params:
+      model: gemini/gemini-3.5-flash-lite
+      api_key: os.environ/GEMINI_API_KEY_5
+      order: 5
+
+  - model_name: fast-model
+    litellm_params:
+      model: gemini/gemini-3.5-flash-lite
+      api_key: os.environ/GEMINI_API_KEY_6
+      order: 6
+
+  - model_name: judge-model
+    litellm_params:
+      model: gemini/gemini-3.6-flash
+      api_key: os.environ/GEMINI_API_KEY
+      order: 1
+
+  - model_name: judge-model
+    litellm_params:
+      model: gemini/gemini-3.6-flash
+      api_key: os.environ/GEMINI_API_KEY_2
+      order: 2
+
+  - model_name: judge-model
+    litellm_params:
+      model: gemini/gemini-3.6-flash
+      api_key: os.environ/GEMINI_API_KEY_3
+      order: 3
+
+  - model_name: judge-model
+    litellm_params:
+      model: gemini/gemini-3.6-flash
+      api_key: os.environ/GEMINI_API_KEY_4
+      order: 4
+
+  - model_name: judge-model
+    litellm_params:
+      model: gemini/gemini-3.6-flash
+      api_key: os.environ/GEMINI_API_KEY_5
+      order: 5
+
+  - model_name: judge-model
+    litellm_params:
+      model: gemini/gemini-3.6-flash
+      api_key: os.environ/GEMINI_API_KEY_6
+      order: 6
+
+  - model_name: embedding-model
+    litellm_params:
+      model: gemini/gemini-embedding-2
+      api_key: os.environ/GEMINI_API_KEY
+      dimensions: 1536
+      order: 1
+
+  - model_name: embedding-model
+    litellm_params:
+      model: gemini/gemini-embedding-2
+      api_key: os.environ/GEMINI_API_KEY_2
+      dimensions: 1536
+      order: 2
+
+  - model_name: embedding-model
+    litellm_params:
+      model: gemini/gemini-embedding-2
+      api_key: os.environ/GEMINI_API_KEY_3
+      dimensions: 1536
+      order: 3
+
+  - model_name: embedding-model
+    litellm_params:
+      model: gemini/gemini-embedding-2
+      api_key: os.environ/GEMINI_API_KEY_4
+      dimensions: 1536
+      order: 4
+
+  - model_name: embedding-model
+    litellm_params:
+      model: gemini/gemini-embedding-2
+      api_key: os.environ/GEMINI_API_KEY_5
+      dimensions: 1536
+      order: 5
+
+  - model_name: embedding-model
+    litellm_params:
+      model: gemini/gemini-embedding-2
+      api_key: os.environ/GEMINI_API_KEY_6
+      dimensions: 1536
+      order: 6

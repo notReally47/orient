@@ -70,8 +70,17 @@ def test_activating_a_skill_returns_the_body_with_the_frontmatter_stripped(tmp_p
 def test_an_activation_lists_its_resources_without_their_contents(tmp_path: Path) -> None:
     rendered: Final = as_activation(Skills(_tree(tmp_path)).body("researching"))
 
-    assert "<file>references/deep.md</file>" in rendered
+    assert "references/deep.md" in rendered
     assert "The detail, loaded only when asked for" not in rendered
+
+
+def test_an_activation_marks_the_body_without_enclosing_it(tmp_path: Path) -> None:
+    """An element that closes around the instructions is protected from compression in full, so
+    the payload that repeats most often across a run would be the one that never shrinks."""
+    rendered: Final = as_activation(Skills(_tree(tmp_path)).body("researching"))
+
+    assert rendered.startswith('<skill name="researching"/>')
+    assert "</skill" not in rendered
 
 
 def test_a_resource_is_read_only_when_it_is_asked_for(tmp_path: Path) -> None:

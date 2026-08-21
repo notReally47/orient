@@ -27,7 +27,6 @@ from orient.orchestrator.events import (
     SectionReady,
     SkillLoaded,
     ThesisReady,
-    ToolFinished,
     ToolStarted,
     TurnFinished,
 )
@@ -241,7 +240,8 @@ async def test_a_summary_for_another_level_is_not_a_hit() -> None:
 
 
 async def test_a_model_that_stops_without_saving_is_nudged_once_then_fails() -> None:
-    """Losing the phase machine means losing its guarantee of termination, so the loop needs one."""
+    """Nothing else bounds a run that has stopped asking for tools: the model decides when it is
+    finished, so a model that decides wrongly would sit in the loop until the turn cap."""
     events: Final = Recorder()
     chat: Final = ScriptedChat(answered("I think that is enough"), answered("still nothing"))
 
@@ -314,7 +314,7 @@ async def test_every_turn_carries_compression_and_the_tool_policy() -> None:
     async with run_deps(chat) as deps:
         await run(_request(), deps, Recorder())
 
-    assert chat.asked[0].guardrails == ("headroom-compression", "tool-permission-guardrail")
+    assert chat.asked[0].guardrails == ("headroom-compression", "tool-budget")
 
 
 async def test_the_research_loop_can_run_on_a_different_model_than_the_writing() -> None:
@@ -337,38 +337,32 @@ async def test_a_date_the_market_was_shut_is_saved_under_the_session_that_traded
     assert events.only(RunFinished)[0].status == "ok"
 
 
-async def test_a_tool_called_past_its_budget_is_refused_rather_than_run_again() -> None:
-    """A model that keeps searching burns a daily request allowance on the same question, and
-    the proxy's permission guardrail matches patterns per request rather than counting."""
-    events: Final = Recorder()
-    searching: Final = calls(("search_news", '{"questions": ["why"]}'))
+async def test_every_turn_is_tagged_with_what_it_was() -> None:
+    """Tags are the dimension daily spend aggregates by, so they describe the kind of call. The
+    run itself is a session rather than a tag, because the dashboard filters on sessions."""
+    chat: Final = ScriptedChat(answered(calls=saving()))
+
+    async with run_deps(chat) as deps:
+        await run(_request(), deps, Recorder())
+
+    tags: Final = chat.asked[0].tags
+    assert f"symbol:{SYMBOL}" in tags
+    assert "level:beginner" in tags
+    assert "phase:agent" in tags
+    assert not any(tag.startswith("run:") for tag in tags)
+
+
+async def test_every_turn_of_one_run_shares_a_session() -> None:
+    """The dashboard groups a conversation by litellm_session_id. Without it a run's turns are
+    scattered among every other run's rows and cannot be read back as one thing."""
     chat: Final = ScriptedChat(
-        answered(calls=searching),
-        answered(calls=searching),
-        answered(calls=searching),
+        answered(calls=calls(("activate_skill", '{"name": "analysis"}'))),
         answered(calls=saving()),
     )
 
-    async with run_deps(chat, max_calls_per_tool=2) as deps:
-        await run(_request(), deps, events)
+    async with run_deps(chat) as deps:
+        await run(_request(), deps, Recorder())
 
-    refusals: Final = [e for e in events.only(ToolFinished) if not e.ok]
-    assert len(refusals) == 1
-    assert "its limit" in refusals[0].detail
-    assert events.only(RunFinished)[0].status == "ok"
-
-
-async def test_saving_is_never_refused_on_budget() -> None:
-    """The only way to finish is to save, so a budget that locked it out would strand every run
-    that needed more than a couple of attempts to satisfy the grounding gate."""
-    events: Final = Recorder()
-    chat: Final = ScriptedChat(
-        answered(calls=saving(markdown=UNGROUNDED)),
-        answered(calls=saving(markdown=UNGROUNDED)),
-        answered(calls=saving(markdown=GROUNDED)),
-    )
-
-    async with run_deps(chat, max_calls_per_tool=1) as deps:
-        await run(_request(), deps, events)
-
-    assert events.only(RunFinished)[0].status == "ok"
+    sessions: Final = {asked.session for asked in chat.asked}
+    assert len(sessions) == 1
+    assert sessions != {None}

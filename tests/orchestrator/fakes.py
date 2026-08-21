@@ -45,6 +45,8 @@ class Asked:
     messages: tuple[Message, ...]
     tools: tuple[str, ...]
     guardrails: tuple[str, ...]
+    tags: tuple[str, ...]
+    session: str | None
 
     @property
     def system(self) -> str:
@@ -65,6 +67,8 @@ class ScriptedChat:
         tools: Sequence[ToolSchema] = (),
         guardrails: Sequence[str] = (),
         schema: Mapping[str, object] | None = None,
+        tags: Sequence[str] = (),
+        session: str | None = None,
     ) -> Completion:
         del schema
         self.asked.append(
@@ -73,6 +77,8 @@ class ScriptedChat:
                 messages=tuple(messages),
                 tools=tuple(entry.name for entry in tools),
                 guardrails=tuple(guardrails),
+                tags=tuple(tags),
+                session=session,
             )
         )
         if not self._answers:
@@ -101,8 +107,8 @@ class RefusingTools:
     def schemas(self) -> tuple[ToolSchema, ...]:
         return ()
 
-    async def execute(self, name: str, arguments: str) -> Outcome:
-        del arguments
+    async def execute(self, name: str, arguments: str, session: str | None = None) -> Outcome:
+        del arguments, session
         return Refused(tool=name, detail=self._detail)
 
 

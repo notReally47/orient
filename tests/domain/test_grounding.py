@@ -109,3 +109,18 @@ def test_a_null_signal_grounds_nothing() -> None:
 def test_evidence_with_nothing_in_it_still_admits_structure() -> None:
     verdict: Final = check("It sits above its 200 day average, the first time since 2025.", frozenset(), SESSION)
     assert isinstance(verdict, Grounded)
+
+
+def test_a_comma_ending_a_clause_is_not_part_of_the_figure() -> None:
+    """A live refusal reported the unmatched figure as "16," because the digit class swallowed
+    the comma after "August 16". A thousands separator sits between digits, never after them."""
+    verdict: Final = check("On Sunday, August 16, South Korea reports.", frozenset(), date(2026, 8, 13))
+
+    assert isinstance(verdict, Ungrounded)
+    assert verdict.figures == ("16",)
+
+
+def test_a_thousands_separator_inside_a_figure_still_reads_as_one_number() -> None:
+    allowed: Final = measured([{"close": 7798.99, "volume": 1234}])
+
+    assert isinstance(check("It closed at 7,798.99 on volume of 1,234.", allowed, date(2026, 8, 13)), Grounded)

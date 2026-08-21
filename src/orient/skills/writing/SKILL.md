@@ -28,6 +28,11 @@ Every figure you write must be one that was measured and handed to you. Do not c
 and do not carry a number out of a news article. A figure that is null was not measurable, which
 means the window was too short, and null is not zero.
 
+Read a figure back from the tool result before writing it. A number close to a measured one is
+not the measured one: writing 7763.18 when the close was 7798.99 fails the same way inventing it
+would, and costs the summary a rewrite. If you cannot point at the field a figure came from, drop
+the sentence.
+
 A return, a change or a distance arrives as a fraction and is written as a percentage: 0.0065 is
 "0.65%". A close, a level, a yield or a price is already in its own units and keeps them. "The VIX
 rose by 0.0055" is the first mistaken for the second: it rose 0.55%, to a level of 14.63.
@@ -50,6 +55,11 @@ say what is now unexplained. Never speculate about why anyone acted.
 
 The last section is what to watch, and it comes from the calendar and from open expectations, not
 from a view about where the price is going.
+
+Name only events the calendar returned. An article may mention something scheduled, and a
+plausible event on a date the calendar left empty is the easiest thing here to invent. The date
+gives it away: "on Sunday 16 August" when nothing in the calendar falls on the 16th quotes a
+figure nothing measured. If the calendar is thin, say the week is quiet. That is a finding.
 
 ## Before you start
 

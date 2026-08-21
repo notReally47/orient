@@ -1,5 +1,17 @@
+"""Runtime configuration, read from the environment and the .env file beside it."""
+
+from typing import Final, cast
+
 from pydantic import Field
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import (
+    BaseSettings,
+    DotEnvSettingsSource,
+    EnvSettingsSource,
+    PydanticBaseSettingsSource,
+    SettingsConfigDict,
+)
+
+PREFIX: Final = "MS_"
 
 
 class ProxyEnv(BaseSettings):
@@ -10,10 +22,74 @@ class ProxyEnv(BaseSettings):
     litellm_master_key: str = Field(default="")
 
 
-class Settings(BaseSettings):
-    """Runtime configuration. Every field is supplied by the environment or .env."""
+class _PrefixedDotEnv(DotEnvSettingsSource):
+    """Reads the prefixed half of a .env file and leaves the rest of it alone.
 
-    model_config = SettingsConfigDict(env_prefix="MS_", env_file=".env", extra="ignore")
+    One file holds settings for everything in the stack: Postgres credentials, provider keys and
+    the proxy's own secrets sit beside orient's own `MS_` variables. The stock reader hands every
+    line in the file to the model, which is harmless while unknown fields are ignored and fatal
+    once they are forbidden.
+
+    Filtering here is what lets both hold at once: a variable belonging to another service is
+    passed over, and a misspelled `MS_` one still arrives and still fails.
+    """
+
+    def __call__(self) -> dict[str, object]:
+        prefix: Final = PREFIX.lower()
+        fields: Final = self.settings_cls.model_fields
+        read: Final = cast("dict[str, object]", super().__call__())
+        # A name the base class matched to a field arrives with its prefix already stripped; one
+        # it could not place keeps the spelling it had in the file.
+        return {name: value for name, value in read.items() if name in fields or name.startswith(prefix)}
+
+
+class _PrefixedEnv(EnvSettingsSource):
+    """Reads the process environment and reports prefixed variables that name no field.
+
+    Left to itself this source collects the variables it recognises and passes over the rest,
+    which means a misspelled or retired one is indistinguishable from one being honoured. It is
+    the environment rather than the file that carries most of the configuration in a container,
+    so this is where a stale setting is most likely to go unnoticed."""
+
+    def __call__(self) -> dict[str, object]:
+        prefix: Final = PREFIX.lower()
+        fields: Final = self.settings_cls.model_fields
+        collected: Final = cast("dict[str, object]", super().__call__())
+        stray: Final = {
+            name: value
+            for name, value in self.env_vars.items()
+            if name.startswith(prefix) and name.removeprefix(prefix) not in fields
+        }
+        return {**collected, **stray}
+
+
+class Settings(BaseSettings):
+    """Runtime configuration. Every field is supplied by the environment or .env.
+
+    An `MS_`-prefixed variable naming no field here stops the process rather than being skipped.
+    A setting that is silently discarded looks exactly like one that is being honoured, so a
+    renamed knob goes on being set for months while doing nothing.
+    """
+
+    model_config = SettingsConfigDict(env_prefix=PREFIX, env_file=".env", extra="forbid")
+
+    @classmethod
+    def settings_customise_sources(
+        cls,
+        settings_cls: type[BaseSettings],
+        init_settings: PydanticBaseSettingsSource,
+        env_settings: PydanticBaseSettingsSource,
+        dotenv_settings: PydanticBaseSettingsSource,
+        file_secret_settings: PydanticBaseSettingsSource,
+    ) -> tuple[PydanticBaseSettingsSource, ...]:
+        """Swaps in the readers that respect the prefix, keeping the usual precedence."""
+        del env_settings, dotenv_settings
+        return (
+            init_settings,
+            _PrefixedEnv(settings_cls),
+            _PrefixedDotEnv(settings_cls),
+            file_secret_settings,
+        )
 
     database_url: str = Field(description="postgresql:// DSN for the orient store")
 
@@ -43,12 +119,6 @@ class Settings(BaseSettings):
         description="The proxy guardrail asked to review a summary before it is stored.",
     )
 
-    max_calls_per_tool: int = Field(
-        default=3,
-        ge=1,
-        le=20,
-        description="How often one tool may be called in a run before the loop refuses it.",
-    )
     max_turns: int = Field(
         default=12,
         ge=2,

@@ -9,16 +9,20 @@ are deterministic and, after the first run, come from the bar cache, so the chec
 against exactly what the tools would have served without the server holding per-run state.
 """
 
-from collections.abc import Mapping
+from collections.abc import Awaitable, Mapping
 from datetime import date, timedelta
 from typing import Annotated, Final
 
 from mcp.server import MCPServer
+from mcp.server.mcpserver.context import Context
 from pydantic import Field
 
+from orient import correlation
 from orient.domain import grounding, sections
 from orient.domain.models import (
+    Calendar,
     Claim,
+    Frozen,
     Instrument,
     ReadingLevel,
     Summary,
@@ -50,6 +54,21 @@ anomaly whenever the summary said something could not be explained.
 """
 
 
+async def _gathered(source: Awaitable[Frozen | None]) -> Frozen | None:
+    """One dead vendor surface costs its own evidence, never the whole summary.
+
+    A vendor can fail one endpoint while serving the rest: Yahoo's calendar rejects a stale crumb
+    while its prices answer normally. Letting that reach the caller would mean no summary can be
+    written at all while one surface is down, and a summary short one source is worth far more
+    than none. What was lost narrows the set of figures the prose may quote, which is the safe
+    direction to fail in.
+    """
+    try:
+        return await source
+    except Exception:  # noqa: BLE001  # a vendor raises whatever its client raises
+        return None
+
+
 async def _measured(deps: ToolDeps, symbol: str, session_date: date) -> tuple[Mapping[str, object], ...]:
     """Everything a summary may quote, re-derived rather than remembered across the run.
 
@@ -58,11 +77,12 @@ async def _measured(deps: ToolDeps, symbol: str, session_date: date) -> tuple[Ma
     name from a figure, "S&P 500" is a numeral the summary has to be allowed to write.
     """
     bars = await deps.prices.bars(symbol, session_date - SIGNALS_LOOKBACK, session_date)
-    signals = compute_signals(symbol, bars)
-    profile = await deps.reference.profile(symbol)
-    backdrop = await deps.market.backdrop(session_date)
-    calendar = await deps.calendars.entries(session_date, session_date + timedelta(days=CALENDAR_DAYS))
-    measured = (signals, profile, backdrop, calendar)
+    measured: Final = (
+        compute_signals(symbol, bars),
+        await _gathered(deps.reference.profile(symbol)),
+        await _gathered(deps.market.backdrop(session_date)),
+        await _gathered(deps.calendars.entries(session_date, session_date + timedelta(days=CALENDAR_DAYS))),
+    )
     return tuple(item.model_dump(mode="json") for item in measured if item is not None)
 
 
@@ -73,6 +93,7 @@ def register(server: MCPServer, deps: ToolDeps) -> None:
         session_date: Annotated[date, Field(description="The session it describes")],
         level: Annotated[ReadingLevel, Field(description="The reading level it was written for")],
         markdown: Annotated[str, Field(description="The finished summary, thesis then four sections")],
+        context: Context,
     ) -> SaveOutcome:
         """Store the finished summary, once every figure in it reconciles with what was measured.
 
@@ -84,6 +105,7 @@ def register(server: MCPServer, deps: ToolDeps) -> None:
         A figure from a news article is not a measurement and will be refused. A summary that
         reconciles but reads badly for its level is refused too, on the same terms.
         """
+        session = correlation.of(context)
         draft = sections.parse(markdown)
         evidence = await _measured(deps, symbol, session_date)
         verdict = grounding.check(sections.prose(draft), grounding.measured(evidence), session_date)
@@ -99,7 +121,7 @@ def register(server: MCPServer, deps: ToolDeps) -> None:
                 ),
             )
 
-        review = await deps.judge.review(sections.prose(draft))
+        review = await deps.judge.review(sections.prose(draft), session)
         if isinstance(review, judge.Blocked):
             return SaveOutcome(outcome="refused", reason="quality", detail=review.detail)
 
@@ -112,7 +134,7 @@ def register(server: MCPServer, deps: ToolDeps) -> None:
                 detail=f"{symbol} has no price history or no asset class",
             )
 
-        await deps.instruments.upsert(
+        await deps.instruments.add(
             Instrument(
                 symbol=symbol,
                 asset_class=profile.asset_class,
@@ -124,8 +146,8 @@ def register(server: MCPServer, deps: ToolDeps) -> None:
         )
         await deps.sessions.upsert(signals)
 
-        extracted = await _extract(deps, markdown)
-        calendar = await deps.calendars.entries(session_date, session_date + timedelta(days=CALENDAR_DAYS))
+        extracted = await _extract(deps, markdown, session)
+        calendar = await _gathered(deps.calendars.entries(session_date, session_date + timedelta(days=CALENDAR_DAYS)))
         summary = Summary(
             id=deps.new_id(),
             symbol=symbol,
@@ -134,12 +156,12 @@ def register(server: MCPServer, deps: ToolDeps) -> None:
             status="ok",
             thesis=draft.thesis,
             sections=draft.sections,
-            calendar=calendar.entries,
+            calendar=calendar.entries if isinstance(calendar, Calendar) else (),
             signals_snapshot=signals,
             annotations=extracted.annotations,
         )
         await deps.summaries.add(summary)
-        await _remember(deps, summary, extracted)
+        await _remember(deps, summary, extracted, session)
         return SaveOutcome(
             outcome="saved",
             summary_id=summary.id,
@@ -151,18 +173,25 @@ def register(server: MCPServer, deps: ToolDeps) -> None:
     _ = save_summary
 
 
-async def _extract(deps: ToolDeps, markdown: str) -> extraction.Extraction:
+async def _extract(deps: ToolDeps, markdown: str, session: str | None) -> extraction.Extraction:
     answer: Final = await deps.chat.complete(
         model=deps.fast_model,
         messages=[SystemMessage(content=EXTRACTION_FRAMING), UserMessage(content=markdown)],
         schema=extraction.SCHEMA,
+        tags=("phase:extract",),
+        session=session,
     )
     if not isinstance(answer, Answered):
         return extraction.Extraction()
     return extraction.parse(answer.message.content)
 
 
-async def _remember(deps: ToolDeps, summary: Summary, extracted: extraction.Extraction) -> None:
+async def _remember(
+    deps: ToolDeps,
+    summary: Summary,
+    extracted: extraction.Extraction,
+    session: str | None,
+) -> None:
     """An embedding the proxy would not serve costs the claims, never the summary."""
     claims: Final = tuple(
         Claim(
@@ -181,7 +210,7 @@ async def _remember(deps: ToolDeps, summary: Summary, extracted: extraction.Extr
     if not claims:
         return
     try:
-        vectors = await deps.embeddings.embed([claim.statement for claim in claims])
+        vectors = await deps.embeddings.embed([claim.statement for claim in claims], session)
     except EmbeddingError:
         return
     await deps.claims.add(claims, vectors)
