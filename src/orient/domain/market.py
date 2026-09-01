@@ -10,9 +10,18 @@ at all. A tool returning what it has beats a tool raising because one figure was
 """
 
 from collections.abc import Mapping
-from datetime import datetime
+from datetime import date, datetime
 
-from orient.domain.models import AssetClass, Breadth, CalendarDate, CrossAsset, Frozen, Level, Rate
+from orient.domain.models import (
+    AssetClass,
+    Breadth,
+    CalendarDate,
+    CrossAsset,
+    EarningsReaction,
+    Frozen,
+    Holding,
+    SectorMove,
+)
 
 
 class InstrumentMatch(Frozen):
@@ -26,13 +35,15 @@ class InstrumentMatch(Frozen):
     change_percent: float | None = None
 
 
-class Holding(Frozen):
-    symbol: str | None = None
-    name: str | None = None
-    weight: float | None = None
-
-
 class InstrumentProfile(Frozen):
+    """What an instrument is. Deliberately not what it does.
+
+    Yahoo ships a business description of a few hundred words, and for Apple it was four fifths of
+    this whole answer. It says nothing about the session, changes perhaps once a year, and the
+    model already knows what the company sells; carrying it meant paying for it again on every
+    turn of the run that followed.
+    """
+
     symbol: str
     name: str | None = None
     asset_class: AssetClass | None = None
@@ -45,11 +56,9 @@ class InstrumentProfile(Frozen):
     trailing_pe: float | None = None
     forward_pe: float | None = None
     dividend_yield: float | None = None
-    fifty_two_week_high: Level | None = None
-    fifty_two_week_low: Level | None = None
     average_volume: float | None = None
     shares_outstanding: float | None = None
-    description: str | None = None
+    next_earnings: CalendarDate | None = None
     holdings: tuple[Holding, ...] = ()
     sector_weights: Mapping[str, float] = {}
 
@@ -68,10 +77,35 @@ class MarketSession(Frozen):
     timezone: str | None = None
 
 
-class SectorMove(Frozen):
-    symbol: str
-    name: str
-    change_percent: Rate | None = None
+class MacroReading(Frozen):
+    """One macro series as of the session: what it read, what it read before, and when.
+
+    The date is not decoration. Inflation and employment are published monthly and weeks in
+    arrears, so a reader told "inflation is 2.9%" deserves to know whether that was measured last
+    month or last quarter. `observed_on` is the period the figure describes, not the day it was
+    released.
+    """
+
+    series: str
+    label: str
+    value: float
+    previous: float | None = None
+    observed_on: date | None = None
+    unit: str | None = None
+
+
+class Macro(Frozen):
+    """The published backdrop, from the statistical agencies rather than from a calendar.
+
+    This exists because the forward economic calendar available here does not work: it is capped
+    at twelve rows drawn from one day of the window and has never once returned a US release.
+    What can be had reliably and without a key is the other direction — what the last prints
+    actually were. "Core inflation was 2.8% in July and 2.9% in June" is a fact a reader can act
+    on; "Kenyan CPI is due on the 31st" is not.
+    """
+
+    readings: tuple[MacroReading, ...] = ()
+    real_yield_10y: float | None = None
 
 
 class MarketContext(Frozen):
@@ -84,8 +118,10 @@ class MarketContext(Frozen):
 
     session: MarketSession | None = None
     cross_asset: CrossAsset = CrossAsset()
+    macro: Macro | None = None
     sectors: tuple[SectorMove, ...] = ()
     sector_breadth: Breadth | None = None
+    sector_market: str | None = None
 
 
 class EarningsEvent(Frozen):
@@ -93,25 +129,6 @@ class EarningsEvent(Frozen):
     eps_estimate: float | None = None
     reported_eps: float | None = None
     surprise_percent: float | None = None
-
-
-class EarningsEstimate(Frozen):
-    period: str
-    average: float | None = None
-    low: float | None = None
-    high: float | None = None
-    year_ago_eps: float | None = None
-    analysts: int | None = None
-    growth: float | None = None
-
-
-class EpsTrend(Frozen):
-    period: str
-    current: float | None = None
-    days_ago_7: float | None = None
-    days_ago_30: float | None = None
-    days_ago_60: float | None = None
-    days_ago_90: float | None = None
 
 
 class EpsRevisions(Frozen):
@@ -149,11 +166,10 @@ class ImpliedMove(Frozen):
 class EarningsDetail(Frozen):
     symbol: str
     events: tuple[EarningsEvent, ...] = ()
-    estimates: tuple[EarningsEstimate, ...] = ()
-    trend: tuple[EpsTrend, ...] = ()
     revisions: tuple[EpsRevisions, ...] = ()
     price_targets: PriceTargets | None = None
     recent_actions: tuple[RatingAction, ...] = ()
+    reactions: tuple[EarningsReaction, ...] = ()
     implied_move: ImpliedMove | None = None
 
 

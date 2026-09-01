@@ -6,7 +6,7 @@ the projection, or vice versa, breaks reads at runtime. These catch it at `make 
 """
 
 from datetime import date
-from typing import Final
+from typing import Final, cast
 from uuid import UUID, uuid4
 
 import pytest
@@ -14,7 +14,6 @@ from pgvector import Vector
 from psycopg.types.json import Json
 
 from orient.domain.models import (
-    Annotation,
     Bar,
     Claim,
     Instrument,
@@ -23,6 +22,7 @@ from orient.domain.models import (
     Signals,
     Summary,
     SummaryKey,
+    Term,
     TrendDistance,
 )
 from orient.store import bars as bars_module
@@ -62,7 +62,7 @@ def _summary(summary_id: UUID) -> Summary:
         status="ok",
         thesis="The index gave back Monday's gain.",
         sections=(Section(heading="The big picture", body="It rose."),),
-        annotations=(Annotation(term="breadth", definition="how many rose versus fell"),),
+        glossary=(Term(term="breadth", meaning="how many rose versus fell"),),
         signals_snapshot=_signals(),
     )
 
@@ -112,7 +112,7 @@ async def test_summary_json_columns_are_wrapped_for_jsonb() -> None:
     await SummaryRepository(as_pool(pool)).add(_summary(uuid4()))
 
     parameters = pool.only.bound
-    for column in ("sections", "annotations", "signals_snapshot"):
+    for column in ("sections", "glossary", "signals_snapshot"):
         assert isinstance(parameters[column], Json)
 
 
@@ -192,19 +192,18 @@ async def test_adding_claims_wraps_each_vector_and_flattens_the_symbol_tuple() -
 
 
 async def test_upserting_an_instrument_sends_every_column() -> None:
-    instrument: Final = Instrument(symbol="AAPL", asset_class="equity", name="Apple Inc.")
+    """Bound by name, so a column the statement names and the parameters omit is a runtime error.
+
+    Asserting against `model_dump()` instead used to pass and hid exactly that: models serialise
+    without their nulls, an index has no sector, and the statement had nothing to bind to it.
+    """
     pool: Final = FakePool()
-    await InstrumentRepository(as_pool(pool)).add(instrument)
 
-    assert pool.only.parameters == instrument.model_dump()
+    await InstrumentRepository(as_pool(pool)).add(Instrument(symbol="^GSPC", asset_class="index", name="S&P 500"))
 
-
-async def test_pinning_targets_a_single_summary_by_id() -> None:
-    summary_id: Final = uuid4()
-    pool: Final = FakePool()
-    await SummaryRepository(as_pool(pool)).set_pinned(summary_id, pinned=True)
-
-    assert pool.only.parameters == {"id": summary_id, "pinned": True}
+    written: Final = cast("dict[str, object]", pool.only.parameters)
+    assert set(written) == {"symbol", "asset_class", "name", "sector", "exchange", "currency"}
+    assert written["sector"] is None
 
 
 async def test_open_claims_are_the_unresolved_ones() -> None:
@@ -259,3 +258,114 @@ async def test_an_instrument_round_trips_through_its_projection() -> None:
 
 async def test_a_missing_instrument_is_none_rather_than_an_error() -> None:
     assert await InstrumentRepository(as_pool(FakePool([]))).get("NOPE") is None
+
+
+async def test_browsing_narrows_pages_and_orders_in_the_query_rather_than_after_it() -> None:
+    """An archive grows and a screen does not, so the cut has to happen in SQL."""
+    pool: Final = FakePool([])
+
+    _ = await SummaryRepository(as_pool(pool)).browse("^GSPC", "beginner", 12, 24)
+
+    assert pool.only.parameters == {"symbol": "^GSPC", "level": "beginner", "limit": 12, "offset": 24}
+    assert "LIMIT %(limit)s OFFSET %(offset)s" in pool.only.text
+    assert "ORDER BY session_date DESC, created_at DESC" in pool.only.text
+
+
+async def test_browsing_without_filters_uses_the_same_statement() -> None:
+    """Two statements for one listing is two places for the ordering to drift apart."""
+    pool: Final = FakePool([])
+
+    _ = await SummaryRepository(as_pool(pool)).browse()
+
+    assert pool.only.bound["symbol"] is None
+    assert pool.only.bound["level"] is None
+    assert "IS NULL OR symbol" in pool.only.text
+
+
+async def test_browsing_reads_only_the_columns_a_list_draws() -> None:
+    """Whole rows carry the prose and the snapshot, which a list of headings never shows."""
+    pool: Final = FakePool([])
+
+    _ = await SummaryRepository(as_pool(pool)).browse()
+
+    assert "thesis" in pool.only.text
+    assert "signals_snapshot" not in pool.only.text
+    assert "sections" not in pool.only.text
+
+
+async def test_a_page_carries_how_many_matched_rather_than_how_many_came_back() -> None:
+    """ "Twelve of a hundred and thirty-seven" is only true if the count is of the whole match."""
+    row: Final = {
+        "id": uuid4(),
+        "symbol": "^GSPC",
+        "session_date": _SESSION_DATE,
+        "level": "beginner",
+        "thesis": "It rose",
+        "pinned": False,
+        "total": 137,
+    }
+
+    page: Final = await SummaryRepository(as_pool(FakePool([row]))).browse()
+
+    assert page.total == 137
+    assert len(page.entries) == 1
+    assert page.entries[0].thesis == "It rose"
+
+
+async def test_nothing_stored_is_an_empty_page_rather_than_an_error() -> None:
+    page: Final = await SummaryRepository(as_pool(FakePool([]))).browse()
+
+    assert page.total == 0
+    assert page.entries == ()
+
+
+async def test_the_instruments_offered_as_filters_are_the_ones_written_about() -> None:
+    """Offering a filter that matches nothing is a dead end a reader has to back out of."""
+    row: Final = {"symbol": "^GSPC", "count": 14, "latest": _SESSION_DATE}
+
+    written: Final = await SummaryRepository(as_pool(FakePool([row]))).written()
+
+    assert written[0].symbol == "^GSPC"
+    assert written[0].count == 14
+
+
+async def test_a_summary_is_fetched_by_its_own_id_rather_than_scanned_for() -> None:
+    pool: Final = FakePool([])
+    wanted: Final = uuid4()
+
+    found: Final = await SummaryRepository(as_pool(pool)).by_id(wanted)
+
+    assert found is None
+    assert pool.only.parameters == {"id": wanted}
+
+
+async def test_storing_a_summary_answers_with_the_id_now_on_file() -> None:
+    """A conflicting key keeps the row already written, and the caller has to learn which one that
+    is: claims hang off the id, so taking the one that was not stored orphans every one of them."""
+    already: Final = uuid4()
+    pool: Final = FakePool([{"id": already}])
+    summary: Final = _summary(uuid4())
+
+    stored: Final = await SummaryRepository(as_pool(pool)).add(summary)
+
+    assert stored == already
+    assert "RETURNING id" in pool.only.text
+    assert "DO UPDATE" in pool.only.text
+
+
+async def test_a_summary_stored_for_the_first_time_keeps_its_own_id() -> None:
+    pool: Final = FakePool([])
+    summary: Final = _summary(uuid4())
+
+    assert await SummaryRepository(as_pool(pool)).add(summary) == summary.id
+
+
+async def test_a_bar_binds_every_column_the_statement_names() -> None:
+    pool: Final = FakePool()
+
+    await BarRepository(as_pool(pool)).add(
+        "MU", (Bar(session_date=date(2026, 8, 26), open=1.0, high=2.0, low=0.5, close=1.5, volume=10),)
+    )
+
+    written: Final = cast("dict[str, object]", pool.executed[0].parameters)
+    assert set(written) == {"symbol", "session_date", "open", "high", "low", "close", "volume"}

@@ -19,8 +19,12 @@ def register(server: MCPServer, deps: ToolDeps) -> None:
             tuple[str, ...],
             Field(
                 description=(
-                    "Every question you want answered, together. Ask full questions rather than "
-                    "tickers: 'why did semiconductors fall on 13 August 2026' beats 'NVDA'"
+                    "Every question you want answered, together. Ask full questions with the date "
+                    "in them rather than tickers: 'why did semiconductor stocks fall on 13 August "
+                    "2026' beats 'NVDA'. One subject per question, because two joined by 'and' "
+                    "are searched as one phrase and find articles about neither. Name the market "
+                    "as well as the sector: 'real estate' alone returns house prices, while 'the "
+                    "real estate sector of the S&P 500' returns the session"
                 ),
                 min_length=1,
                 max_length=MAX_QUESTIONS,
@@ -32,7 +36,8 @@ def register(server: MCPServer, deps: ToolDeps) -> None:
 
         Ask everything you want to know at once. The questions are searched in parallel and read
         for you, so asking six costs the same round trip as asking one, and there is no reason to
-        hold back on the second question.
+        hold back on the second question. Depends on the measurements: you cannot ask a good
+        question until you know what needs explaining.
 
         What comes back is somebody's claim about the market rather than a measurement. Use it to
         explain a move; never quote a figure out of it, because no figure in here was measured and

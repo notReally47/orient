@@ -6,7 +6,7 @@ place and leaves the rest of the package strict. Callers get plain records keyed
 model's field names and validate them into that model themselves.
 
 Most of these frames carry their real key in the index rather than a column, and the name it
-takes after `reset_index()` differs per surface, so each function renames it here. `make shapes`
+takes after `reset_index()` differs per surface, so each function renames it here. `make dump`
 prints the current names; re-run it when one of these starts returning nulls.
 """
 
@@ -22,7 +22,6 @@ NestedRecords = Sequence[Mapping[tuple[str, str], object]]
 
 DATE_KEY: Final = ("Date", "")
 
-# What Yahoo says when the crumb it was handed is no longer one it will accept.
 _CRUMB_REJECTED: Final = "Invalid Crumb"
 _ONE_DAY: Final = timedelta(days=1)
 
@@ -41,8 +40,32 @@ class _NestedFrame(Protocol):
     def to_dict(self, orient: str) -> NestedRecords: ...
 
 
-def _records(frame: _Frame) -> Records:
-    return frame.reset_index().to_dict(orient="records")
+def _present(value: object) -> object:
+    """A missing cell as `None` rather than as the float pandas writes for one.
+
+    A frame with no value in a cell carries NaN, and a missing timestamp carries NaT. Both are
+    values rather than nulls, so they pass straight through `to_dict` into a field typed as text
+    and fail validation there, taking the whole result with them. Neither equals itself, which is
+    the one test that catches both without importing pandas to ask.
+    """
+    return None if value != value else value  # noqa: PLR0124
+
+
+def _records(frame: _Frame | None) -> Records:
+    """Rows out of a frame, and nothing out of a surface that had nothing to give.
+
+    yfinance answers `None` rather than an empty frame when a surface does not apply to a symbol
+    — `earnings_dates` on an index is the one that bites, because an index has no earnings and
+    every fund and currency pair is in the same position. Reaching for `reset_index` on that
+    `None` raised out of the provider, through the tool boundary, and reached the model as the
+    bare words "Error executing tool", which costs it a turn and tells it nothing. An absent
+    surface is an ordinary answer here: no rows.
+    """
+    if frame is None:
+        return ()
+    return tuple(
+        {key: _present(value) for key, value in row.items()} for row in frame.reset_index().to_dict(orient="records")
+    )
 
 
 def yahoo_daily_bars(symbol: str, start: date, end: date) -> Records:
@@ -157,6 +180,37 @@ def yahoo_info(symbol: str) -> Mapping[str, object]:
     )
 
 
+def yahoo_session_quote(symbol: str) -> Mapping[str, object]:
+    """One symbol's latest settled session, for series this vendor publishes no history for.
+
+    Every Indian sector index is like this: `^CNXAUTO` has a live quote and a complete bar for the
+    most recent session, and asking for any window at all returns that one row. A sector board
+    needs one session's change per sector and nothing before it, so the quote is enough — but only
+    for the session the quote is actually describing, which is why the date comes back with it and
+    the caller is expected to check it against the session it asked about.
+    """
+    ticker: Final = yf.Ticker(symbol)
+    quote: Final = cast(
+        "Mapping[str, object]",
+        ticker.fast_info,  # pyright: ignore[reportUnknownMemberType]  # no stubs
+    )
+    latest: Final = _records(
+        cast(
+            "_Frame",
+            ticker.history(period="5d", auto_adjust=False),  # pyright: ignore[reportUnknownMemberType]  # no stubs
+        )
+    )
+    if not latest:
+        return {}
+    return {
+        "symbol": symbol,
+        "session_date": latest[-1].get("Date"),
+        "close": latest[-1].get("Close"),
+        "previous_close": quote.get("previousClose"),
+        "timezone": quote.get("timezone"),
+    }
+
+
 def yahoo_fund_holdings(symbol: str) -> Records:
     frame: Final = cast(
         "_Frame",
@@ -204,7 +258,7 @@ def yahoo_market_status(region: str) -> Mapping[str, object] | None:
 
 def yahoo_earnings_dates(symbol: str) -> Records:
     frame: Final = cast(
-        "_Frame",
+        "_Frame | None",
         yf.Ticker(symbol).earnings_dates,  # pyright: ignore[reportUnknownMemberType]  # no stubs
     )
     return tuple(
@@ -213,43 +267,6 @@ def yahoo_earnings_dates(symbol: str) -> Records:
             "eps_estimate": row.get("EPS Estimate"),
             "reported_eps": row.get("Reported EPS"),
             "surprise_percent": row.get("Surprise(%)"),
-        }
-        for row in _records(frame)
-    )
-
-
-def yahoo_earnings_estimate(symbol: str) -> Records:
-    frame: Final = cast(
-        "_Frame",
-        yf.Ticker(symbol).earnings_estimate,  # pyright: ignore[reportUnknownMemberType]  # no stubs
-    )
-    return tuple(
-        {
-            "period": row.get("period"),
-            "average": row.get("avg"),
-            "low": row.get("low"),
-            "high": row.get("high"),
-            "year_ago_eps": row.get("yearAgoEps"),
-            "analysts": row.get("numberOfAnalysts"),
-            "growth": row.get("growth"),
-        }
-        for row in _records(frame)
-    )
-
-
-def yahoo_eps_trend(symbol: str) -> Records:
-    frame: Final = cast(
-        "_Frame",
-        yf.Ticker(symbol).eps_trend,  # pyright: ignore[reportUnknownMemberType]  # no stubs
-    )
-    return tuple(
-        {
-            "period": row.get("period"),
-            "current": row.get("current"),
-            "days_ago_7": row.get("7daysAgo"),
-            "days_ago_30": row.get("30daysAgo"),
-            "days_ago_60": row.get("60daysAgo"),
-            "days_ago_90": row.get("90daysAgo"),
         }
         for row in _records(frame)
     )
@@ -337,8 +354,7 @@ def _calendar_frame(start: date, end: date, surface: str) -> "_Frame":
     except Exception as exc:
         if _CRUMB_REJECTED not in str(exc):
             raise
-        # The singleton exposes no way to invalidate the token it is holding.
-        yf.data.YfData()._crumb = None  # noqa: SLF001  # pyright: ignore[reportPrivateUsage]
+        yf.data.YfData()._crumb = None  # noqa: SLF001  # pyright: ignore[reportPrivateUsage]  # no public invalidation
         return cast("_Frame", getattr(yf.Calendars(start, end), surface))  # pyright: ignore[reportAny]  # no stubs
 
 
@@ -352,6 +368,7 @@ def yahoo_earnings_calendar(start: date, end: date) -> Records:
             "starts_at": row.get("Event Start Date"),
             "timing": row.get("Timing"),
             "eps_estimate": row.get("EPS Estimate"),
+            "market_cap": row.get("Marketcap"),
         }
         for row in _records(frame)
     )

@@ -1,7 +1,24 @@
-"""The four Yahoo calendars, flattened into one shape.
+"""Yahoo's calendars, flattened into one shape and cut down to what a session brief can use.
 
-An analyst asks "what is happening this week", not "which of four endpoints holds it", so the
-four frames collapse into one sorted list tagged by kind.
+An analyst asks "what is happening this week", not "which of these endpoints holds it", so the
+frames collapse into one sorted list tagged by kind.
+
+Two of Yahoo's four surfaces are not worth their weight and are no longer asked for by default.
+
+The economic one cannot answer the question it appears to. Every surface is capped at twelve
+rows, and the economic one returns those twelve from the *last* day of the window whatever its
+length: a request for the coming week comes back with one day of releases from Bahrain, Kenya and
+Lithuania, and never a US print. Measured over eight consecutive single-day windows it returned
+ninety-six rows and not one of them was American. A week that contains a CPI release therefore
+reads as a week with nothing in it, which is worse than saying nothing.
+
+The IPO and split surfaces are dominated by the same twelve-row cap. A single bond fund listing
+eight share classes takes eight of the twelve IPO slots, and the split rows are micro-cap
+consolidations, frequently duplicated. Neither moves an instrument anybody is reading about.
+
+What is left is earnings, which is the one that matters, and it keeps the estimate and the size
+of the company so that "who reports this week" can be ranked rather than merely listed. The other
+kinds remain reachable through `kinds` for a caller that specifically wants them.
 
 Each row is validated on its own. Validating the batch would let one row Yahoo typed unexpectedly
 cost the other forty-seven, and partial success is a first-class result everywhere else here.
@@ -26,6 +43,8 @@ from orient.providers._untyped import (
 
 ALL_KINDS: Final[tuple[CalendarKind, ...]] = ("earnings", "economic", "ipo", "split")
 
+DEFAULT_KINDS: Final[tuple[CalendarKind, ...]] = ("earnings",)
+
 _ENTRY: Final = TypeAdapter(CalendarEntry)
 
 Fetch = Callable[[date, date], Records]
@@ -34,12 +53,19 @@ Source = tuple[Fetch, Shape]
 
 
 def _earnings_entry(row: Mapping[str, object]) -> Mapping[str, object]:
+    """Timing, the estimate and the size, because "who reports" is only half the question.
+
+    Yahoo sends all three and the earlier shape kept only the timing, which left the reader with
+    a list of names and no way to tell a mega-cap print from a micro-cap one.
+    """
     return {
         "kind": "earnings",
         "label": row.get("company") or row.get("symbol") or "unknown",
         "symbol": row.get("symbol"),
         "occurs_at": row.get("starts_at"),
         "detail": row.get("timing"),
+        "eps_estimate": row.get("eps_estimate"),
+        "market_cap": row.get("market_cap"),
     }
 
 
@@ -116,12 +142,28 @@ class YahooCalendars:
         kinds: Sequence[CalendarKind] | None = None,
     ) -> Calendar:
         """Sorted by date, undated last, so the soonest thing is always first."""
-        wanted: Final = ALL_KINDS if kinds is None else kinds
+        wanted: Final = DEFAULT_KINDS if kinds is None else kinds
         rows: Final = tuple(
             shape(row) for kind in wanted for fetch, shape in (self._sources[kind],) for row in fetch(start, end)
         )
         read: Final = tuple(entry for entry in map(_read, rows) if entry is not None)
         return Calendar(
-            entries=tuple(sorted(read, key=lambda entry: (entry.occurs_at is None, entry.occurs_at or date.max))),
+            entries=_deduplicated(
+                sorted(read, key=lambda entry: (entry.occurs_at is None, entry.occurs_at or date.max))
+            ),
             unreadable=len(rows) - len(read),
         )
+
+
+def _deduplicated(entries: Sequence[CalendarEntry]) -> tuple[CalendarEntry, ...]:
+    """One row per thing happening. Yahoo repeats a listing once per share class, and a reader
+    shown the same fund eight times reasonably concludes eight things are happening."""
+    seen: Final[set[tuple[CalendarKind, str, date | None]]] = set()
+    kept: Final[list[CalendarEntry]] = []
+    for entry in entries:
+        key = (entry.kind, entry.label, entry.occurs_at)
+        if key in seen:
+            continue
+        seen.add(key)
+        kept.append(entry)
+    return tuple(kept)

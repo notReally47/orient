@@ -1,22 +1,15 @@
----
-name: Currencies
-description: What to establish about a currency pair session, which always has two sides
----
+A currency pair has two economies and a rate differential, and a move in it is always ambiguous
+about which side caused it.
 
-A currency pair has no earnings, no sector and no breadth. It has two economies and a rate
-differential, and a move in the pair is always ambiguous about which side caused it.
+That ambiguity is measured. `relative` compares the pair against the dollar index on the same
+session: `excess_over_benchmark` near zero says the dollar was the actor, and a large excess says
+the other currency was. Quote it rather than eyeballing two numbers.
 
-Use the dollar index in the cross-asset block first. A pair against the dollar that moved while
-the dollar index moved the same way tells you the dollar was the actor. A pair that moved while
-the dollar index did not is the other currency's story.
+The 10 year and 2 year yields are the rate side of the same question. Currencies follow rate
+expectations, so a yield move on the same day is the most defensible thing to point at.
 
-The 10 year and 2 year yields in the cross-asset block are the rate side of the same question.
-Currencies follow rate expectations, so a yield move on the same day is the most defensible thing
-you can point at.
+There is no volume for a pair, and there is no sector and no breadth. Quote realised volatility
+when it is far from its usual level.
 
-Volatility and volume are weaker signals here than elsewhere, since foreign exchange volume
-through this data is partial. Quote realised volatility when it is far from its usual level, and
-say little about volume.
-
-Do not describe carry, positioning, central bank intent or intervention. Nothing measured any of
-them, and the last two are speculation about motive, which is not permitted.
+Do not write about carry, positioning, central bank intent or intervention. Nothing measured them,
+and the last two are speculation about motive.

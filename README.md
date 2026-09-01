@@ -29,7 +29,7 @@ Exa API key, both of which have free tiers
 ```bash
 cp .env.example .env      # then fill in GEMINI_API_KEY, EXA_API_KEY and the two LiteLLM keys
 make bootstrap            # create the venv, install the project
-make up                   # start postgres, litellm, headroom and jaeger, then apply the schema
+make start                # start postgres, litellm, headroom and jaeger, then apply the schema
 make probe                # verify every dependency before going further
 ```
 
@@ -39,7 +39,7 @@ every table absent from it
 
 ## The tool server
 
-Nine tools over MCP, served by the `mcp` container on port 9000. Point any MCP client at
+Fifteen tools over MCP, served by the `mcp` container on port 9000. Point any MCP client at
 `http://localhost:9000/mcp`, or run the image with `--transport stdio` to have a client
 launch it directly. For Claude Code:
 
@@ -49,8 +49,8 @@ claude mcp add --transport http orient http://localhost:9000/mcp
 
 Every figure the tools return was measured. A window too short to compute comes back null
 rather than approximated, so a null means unknown. Breadth and sector contribution are counted
-across the eleven sector ETFs and never across index constituents, because no constituent list
-is available; the field names say sector for that reason
+across the sector series of the instrument's own market and never across index constituents,
+because no constituent list is available; the field names say sector for that reason
 
 `make probe` is not optional. It checks Postgres and the pgvector extension, the
 proxy's health, that all four model roles resolve, that both guardrails loaded, a
@@ -100,7 +100,7 @@ basedpyright in strict mode, and the offline test suite with an 85% coverage flo
 Those tests may only connect to loopback, so one that reaches a real service fails
 loudly rather than passing slowly
 
-`make test-integration` is the other half, and it needs `make up` first. It exercises
+`make test-integration` is the other half, and it needs `make start` first. It exercises
 the SQL against the live Postgres: statement validity, projections matching the tables,
 jsonb round trips and an HNSW similarity search. It cleans up the rows it creates
 

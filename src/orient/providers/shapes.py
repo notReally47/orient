@@ -6,7 +6,7 @@ releases. Re-run this when a provider starts failing and diff the output against
 models expect. Every attribute is reached dynamically through `_invoke` and `_attr`, which
 is what keeps this module free of the suppressions the rest of the package refuses.
 
-Run with `make shapes`.
+Run with `make dump`.
 """
 
 import sys
@@ -191,8 +191,6 @@ def _screen_quote_keys() -> object:
 def _earnings_probes() -> tuple[Probe, ...]:
     names: Final = (
         "earnings_dates",
-        "earnings_estimate",
-        "eps_trend",
         "eps_revisions",
         "analyst_price_targets",
         "upgrades_downgrades",

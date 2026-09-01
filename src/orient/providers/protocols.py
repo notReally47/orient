@@ -29,7 +29,7 @@ from orient.domain.market import (
     InstrumentProfile,
     MarketContext,
 )
-from orient.domain.models import Bar, Calendar, CalendarKind, Observation
+from orient.domain.models import AssetClass, Bar, Calendar, CalendarKind, Observation, Relative
 
 
 class Prices(Protocol):
@@ -51,7 +51,9 @@ class Series(Protocol):
 class Discovery(Protocol):
     async def by_screen(self, key: str, count: int, /) -> tuple[InstrumentMatch, ...]: ...
 
-    async def anything(self, query: str, count: int, /) -> tuple[InstrumentMatch, ...]: ...
+    async def anything(
+        self, query: str, count: int, asset_class: AssetClass | None = ..., /
+    ) -> tuple[InstrumentMatch, ...]: ...
 
 
 class Reference(Protocol):
@@ -65,7 +67,18 @@ class Earnings(Protocol):
 
 
 class MarketData(Protocol):
-    async def backdrop(self, as_of: date, /) -> MarketContext: ...
+    async def backdrop(self, as_of: date, exchange: str | None = ..., /) -> MarketContext: ...
+
+    async def relative(
+        self,
+        symbol: str,
+        session_return: float | None,
+        as_of: date,
+        asset_class: str | None = ...,
+        sector: str | None = ...,
+        exchange: str | None = ...,
+        /,
+    ) -> Relative | None: ...
 
 
 class Calendars(Protocol):

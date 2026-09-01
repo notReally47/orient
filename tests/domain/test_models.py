@@ -8,10 +8,12 @@ import pytest
 from pydantic import ValidationError
 
 from orient.domain.models import (
+    SIGNALS_VERSION,
     Claim,
     ClaimKind,
     CrossAsset,
     Returns,
+    SectorMove,
     Signals,
     TrendDistance,
 )
@@ -116,3 +118,100 @@ def test_a_level_is_rounded_the_way_a_venue_quotes_it() -> None:
 def test_the_curve_spread_is_rounded_rather_than_carrying_float_error() -> None:
     """4.63 minus 4.15 is 0.48, and 0.47999999999999954 is the same number spelled unusably."""
     assert CrossAsset(yield_10y=4.63, yield_2y=4.15).spread_10s2s == 0.48
+
+
+@pytest.mark.parametrize(
+    ("quoted", "stored"),
+    [
+        (7798.9912, 7798.99),
+        (78335.1867, 78335.19),
+        (1.173241, 1.17324),
+        (0.000034219, 0.0000342190),
+        (23.456789, 23.4568),
+        (0.0, 0.0),
+        (-1.173241, -1.17324),
+    ],
+)
+def test_a_level_is_kept_to_the_precision_its_own_size_is_quoted_to(quoted: float, stored: float) -> None:
+    """Two decimal places suits an index and destroys a currency pair. A pair at 1.17324 stored as
+    1.17 leaves the writer unable to quote the rate it was handed, and the grounding check unable
+    to recognise the true one."""
+    signals: Final = Signals(
+        symbol="X", session_date=date(2026, 8, 21), close=quoted, returns=Returns(), trend=TrendDistance()
+    )
+
+    assert signals.close == stored
+
+
+def test_a_snapshot_carries_every_sector_rather_than_the_strongest_few() -> None:
+    """Five sectors missing from the middle makes a session look more polarised than it was, and
+    leaves the chart unable to corroborate prose that counts how many rose."""
+    signals: Final = Signals(
+        symbol="^GSPC",
+        session_date=date(2026, 8, 21),
+        close=7798.99,
+        returns=Returns(),
+        trend=TrendDistance(),
+        sectors=(
+            SectorMove(symbol="XLK", name="Technology", change_percent=0.0101),
+            SectorMove(symbol="XLB", name="Materials", change_percent=-0.0051),
+        ),
+    )
+
+    assert [sector.name for sector in signals.sectors] == ["Technology", "Materials"]
+    assert Signals.model_validate_json(signals.model_dump_json()).sectors == signals.sectors
+
+
+def test_a_snapshot_written_under_an_earlier_version_still_reads_back() -> None:
+    """Revisiting is the whole point of storing a summary, so a rename here cannot break it.
+
+    `volume_vs_20_day` became `volume_multiple_20d` when it turned out the name did not say the
+    figure was a multiple and not a change. Every row already on file still spells it the old way.
+    """
+    stored: Final = {
+        "symbol": "^GSPC",
+        "session_date": "2026-08-24",
+        "close": 7652.86,
+        "returns": {"one_day": -0.0028},
+        "trend": {"from_50_day": 0.0141},
+        "volume_vs_20_day": 0.8752,
+        "version": "1",
+    }
+
+    signals: Final = Signals.model_validate(stored)
+
+    assert signals.volume_multiple_20d == 0.8752
+    assert signals.version == "1"
+
+
+def test_a_field_an_older_snapshot_carried_and_nothing_replaced_is_dropped() -> None:
+    """A measurement that has since been removed must not cost the reader the whole summary."""
+    signals: Final = Signals.model_validate(
+        {
+            "symbol": "^GSPC",
+            "session_date": "2026-08-24",
+            "close": 7652.86,
+            "returns": {},
+            "trend": {},
+            "some_measurement_we_no_longer_take": 3.4,
+            "version": "1",
+        }
+    )
+
+    assert signals.close == 7652.86
+
+
+def test_a_snapshot_claiming_the_current_version_is_still_validated_strictly() -> None:
+    """The leniency is for rows this code wrote before a rename, never for live vendor data."""
+    with pytest.raises(ValidationError):
+        _ = Signals.model_validate(
+            {
+                "symbol": "^GSPC",
+                "session_date": "2026-08-24",
+                "close": 7652.86,
+                "returns": {},
+                "trend": {},
+                "volume_vs_20_day": 0.8752,
+                "version": SIGNALS_VERSION,
+            }
+        )

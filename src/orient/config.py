@@ -22,6 +22,19 @@ class ProxyEnv(BaseSettings):
     litellm_master_key: str = Field(default="")
 
 
+class GuiEnv(BaseSettings):
+    """What the page needs, which is one address.
+
+    The front end holds no database, no provider key and no proxy credential: everything it
+    shows comes back over HTTP from the orchestrator. Unknown variables are ignored rather than
+    forbidden, because the file it reads is shared with services whose settings are not its own.
+    """
+
+    model_config = SettingsConfigDict(env_prefix=PREFIX, env_file=".env", extra="ignore")
+
+    orchestrator_base_url: str = Field(default="http://localhost:8000")
+
+
 class _PrefixedDotEnv(DotEnvSettingsSource):
     """Reads the prefixed half of a .env file and leaves the rest of it alone.
 
@@ -38,8 +51,6 @@ class _PrefixedDotEnv(DotEnvSettingsSource):
         prefix: Final = PREFIX.lower()
         fields: Final = self.settings_cls.model_fields
         read: Final = cast("dict[str, object]", super().__call__())
-        # A name the base class matched to a field arrives with its prefix already stripped; one
-        # it could not place keeps the spelling it had in the file.
         return {name: value for name, value in read.items() if name in fields or name.startswith(prefix)}
 
 
@@ -100,6 +111,7 @@ class Settings(BaseSettings):
     orchestrator_base_url: str = Field(default="http://localhost:8000")
 
     headroom_api_base: str = Field(default="http://localhost:8787")
+    gui_base_url: str = Field(default="http://localhost:8501")
     jaeger_ui_url: str = Field(default="http://localhost:16686")
     otlp_endpoint: str = Field(default="http://localhost:4318")
 
@@ -120,11 +132,19 @@ class Settings(BaseSettings):
     )
 
     max_turns: int = Field(
-        default=12,
+        default=18,
         ge=2,
         le=30,
         description="Model turns before a run gives up. A turn may carry several tool calls.",
     )
     requests_per_minute: int = Field(default=15, ge=1)
 
-    request_timeout_seconds: float = Field(default=120.0, gt=0)
+    request_timeout_seconds: float = Field(
+        default=600.0,
+        gt=0,
+        description=(
+            "How long one model call may take before the client gives up. It has to exceed the "
+            "slowest answer the upstream actually produces: abandoning a call that is still "
+            "running does not stop it, it only means nobody is left to read the reply."
+        ),
+    )

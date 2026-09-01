@@ -15,6 +15,8 @@ from openai import AsyncOpenAI
 from pydantic import TypeAdapter
 
 from orient.llm.chat import (
+    TRANSIENT_ATTEMPTS,
+    TRANSIENT_WAITS,
     Answered,
     AssistantMessage,
     ProxyChat,
@@ -86,7 +88,12 @@ async def _chat(handler: Handler) -> AsyncGenerator[ProxyChat, None]:
         max_retries=0,
         http_client=httpx2.AsyncClient(transport=httpx2.MockTransport(handler)),
     ) as client:
-        yield ProxyChat(client, RateLimiter(15, sleep=_no_sleep), lambda: {"traceparent": TRACEPARENT})
+        yield ProxyChat(
+            client,
+            RateLimiter(15, sleep=_no_sleep),
+            lambda: {"traceparent": TRACEPARENT},
+            sleep=_no_sleep,
+        )
 
 
 async def test_an_answer_carries_its_content_and_what_it_cost() -> None:
@@ -226,3 +233,64 @@ async def test_the_whole_transcript_survives_the_round_trip() -> None:
             },
         }
     ]
+
+
+async def test_a_model_that_says_not_right_now_is_asked_again() -> None:
+    """A demand spike answers in milliseconds and passes. Throwing away eight turns of research
+    for one of them wastes the quota those turns cost."""
+    attempts: Final[list[int]] = []
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        del request
+        attempts.append(1)
+        if len(attempts) < 3:
+            return httpx2.Response(503, content=b'{"error":{"message":"high demand"}}')
+        return httpx2.Response(200, content=json.dumps(_completion()).encode())
+
+    async with _chat(handler) as chat:
+        result = await chat.complete("primary-model", [UserMessage(content="hello")])
+
+    assert isinstance(result, Answered)
+    assert len(attempts) == 3
+
+
+async def test_a_model_that_stays_unavailable_gives_up_rather_than_looping() -> None:
+    attempts: Final[list[int]] = []
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        del request
+        attempts.append(1)
+        return httpx2.Response(503, content=b'{"error":{"message":"high demand"}}')
+
+    async with _chat(handler) as chat:
+        result = await chat.complete("primary-model", [UserMessage(content="hello")])
+
+    assert isinstance(result, Unavailable)
+    assert len(attempts) == TRANSIENT_ATTEMPTS
+
+
+async def test_a_spent_daily_allowance_is_not_retried() -> None:
+    """A quota is still spent a second later, so asking again only burns time."""
+    attempts: Final[list[int]] = []
+
+    def handler(request: httpx2.Request) -> httpx2.Response:
+        del request
+        attempts.append(1)
+        return httpx2.Response(429, content=b'{"error":{"message":"quota"}}')
+
+    async with _chat(handler) as chat:
+        result = await chat.complete("primary-model", [UserMessage(content="hello")])
+
+    assert isinstance(result, Unavailable)
+    assert len(attempts) == 1
+
+
+async def test_the_waits_cover_every_retry_the_budget_allows() -> None:
+    """A backoff table shorter than the attempt count silently indexes off the end."""
+    assert len(TRANSIENT_WAITS) == TRANSIENT_ATTEMPTS - 1
+
+
+async def test_how_long_a_spike_can_last_before_the_run_is_given_up_on() -> None:
+    """Records the tolerance rather than asserting a number for its own sake: a spike measured
+    against this upstream ran about a minute, and the budget has to exceed that with room."""
+    assert sum(TRANSIENT_WAITS) >= 45

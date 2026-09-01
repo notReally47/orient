@@ -15,14 +15,29 @@ from typing import Protocol
 from uuid import UUID, uuid4
 
 from orient.config import Settings
-from orient.domain.models import Summary, SummaryKey
+from orient.domain.models import Shelf, Summary, SummaryKey, Written
 from orient.llm.chat import ChatModel
 from orient.orchestrator.tools import ToolCatalog
 from orient.skills.loader import Skills
 
 
 class Summaries(Protocol):
+    """Reading only. Writing happens behind `save_summary`, which this side cannot reach."""
+
     async def find(self, key: SummaryKey, /) -> Summary | None: ...
+
+    async def browse(
+        self,
+        symbol: str | None = ...,
+        level: str | None = ...,
+        limit: int = ...,
+        offset: int = ...,
+        /,
+    ) -> Shelf: ...
+
+    async def written(self) -> tuple[Written, ...]: ...
+
+    async def by_id(self, summary_id: UUID, /) -> Summary | None: ...
 
 
 def now() -> datetime:

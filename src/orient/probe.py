@@ -27,6 +27,10 @@ from orient.providers.protocols import Prices, Series
 from orient.providers.yahoo import YahooPrices
 
 TIMEOUT: Final = httpx.Timeout(30.0)
+
+# A model call is not an HTTP health check. The smallest possible completion measured 17 seconds
+# against this upstream, so 30 reports a working proxy as broken whenever it is merely busy.
+MODEL_TIMEOUT: Final = httpx.Timeout(120.0)
 REQUIRED_GUARDRAILS: Final = frozenset({"headroom-compression", "quality-judge", "tool-budget"})
 EXPECTED_TABLES: Final = frozenset({"instruments", "bars", "sessions", "summaries", "claims"})
 PROXY_SERVICE_NAME: Final = "litellm-proxy"
@@ -45,6 +49,8 @@ EXPECTED_TOOLS: Final = frozenset(
         "search_news",
         "recall_history",
         "search_knowledge",
+        "find_similar_sessions",
+        "check_summary",
         "save_summary",
     }
 )
@@ -77,6 +83,7 @@ class Deps:
     proxy_master_key: str
     mcp_url: str
     proxy: httpx.Client
+    gui: httpx.Client
     headroom: httpx.Client
     jaeger: httpx.Client
     orchestrator: httpx.Client
@@ -188,7 +195,7 @@ def evaluate_postgres(version: str | None, tables: frozenset[str]) -> CheckResul
             POSTGRES_CHECK,
             "proxy-owned tables are in the application database, which the proxy reconciles "
             "against its own schema. Point its DATABASE_URL at the `litellm` database, then "
-            "`make reset && make up`",
+            "`make reset && make start`",
         )
 
     missing: Final = EXPECTED_TABLES - tables
@@ -465,6 +472,25 @@ def check_orchestrator(deps: Deps) -> CheckResult:
     return evaluate_orchestrator(payload)
 
 
+def check_gui(deps: Deps) -> CheckResult:
+    """The page itself, which is the only part of the stack a person opens directly.
+
+    Streamlit answers its own health endpoint before the script has ever run, so a page that
+    imports badly still reports healthy. Asking for the page body instead is what catches that.
+    """
+    name: Final = "streamlit gui"
+    try:
+        response = deps.gui.get("/")
+    except httpx.HTTPError as exc:
+        return Failed(name, describe_failure(exc))
+
+    if not response.is_success:
+        return Failed(name, f"HTTP {response.status_code}: {response.text[:160]}")
+    if "streamlit" not in response.text.lower():
+        return Failed(name, "answered, but the body is not a Streamlit page")
+    return Passed(name, "serving")
+
+
 def check_yahoo(deps: Deps) -> CheckResult:
     name: Final = "yahoo finance (yfinance)"
     end: Final = datetime.now(tz=UTC).date()
@@ -504,6 +530,7 @@ CHECKS: Final[tuple[Check, ...]] = (
     check_headroom,
     check_mcp,
     check_orchestrator,
+    check_gui,
     check_jaeger,
     check_yahoo,
     check_fred,
@@ -554,7 +581,10 @@ def main() -> int:
             settings=settings,
             proxy_master_key=ProxyEnv().litellm_master_key,
             mcp_url=settings.mcp_url,
-            proxy=stack.enter_context(httpx.Client(base_url=settings.proxy_base_url, headers=auth, timeout=TIMEOUT)),
+            proxy=stack.enter_context(
+                httpx.Client(base_url=settings.proxy_base_url, headers=auth, timeout=MODEL_TIMEOUT)
+            ),
+            gui=stack.enter_context(httpx.Client(base_url=settings.gui_base_url, timeout=TIMEOUT)),
             headroom=stack.enter_context(httpx.Client(base_url=settings.headroom_api_base, timeout=TIMEOUT)),
             jaeger=stack.enter_context(httpx.Client(base_url=settings.jaeger_ui_url, timeout=TIMEOUT)),
             orchestrator=stack.enter_context(httpx.Client(base_url=settings.orchestrator_base_url, timeout=TIMEOUT)),

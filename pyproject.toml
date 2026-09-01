@@ -43,12 +43,13 @@ optional-dependencies.dev = [
     "ruff>=0.16",
 ]
 optional-dependencies.gui = [
-    "streamlit>=1.61",
+    "streamlit>=1.62",
     "streamlit-echarts>=0.7",
 ]
 scripts.orient-mcp = "orient.mcp.server:main"
 scripts.orient-orchestrator = "orient.orchestrator.main:main"
 scripts.orient-probe = "orient.probe:main"
+scripts.orient-gui = "orient.gui.main:main"
 
 [tool.hatch]
 build.targets.wheel.packages = ["src/orient"]

@@ -22,8 +22,6 @@ from orient import correlation
 
 APPLY_PATH: Final = "/guardrails/apply_guardrail"
 
-# The review is a model call the proxy bills to whoever asked for it, and this is what
-# tells it apart from the run's own turns in the spend records.
 TAGS: Final = ("phase:review",)
 BLOCKED: Final = (400, 422)
 DETAIL_LENGTH: Final = 1200
@@ -66,6 +64,11 @@ class JudgeClient:
         self._guardrail: Final = guardrail
 
     async def review(self, prose: str, session: str | None = None) -> Verdict:
+        """Whether a finished summary reads for the level it was written for.
+
+        The one check a mechanical rule cannot make. Empty prose passes rather than erroring,
+        because there is nothing to disagree with.
+        """
         if not prose.strip():
             return Passed()
         try:

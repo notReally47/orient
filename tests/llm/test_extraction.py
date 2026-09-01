@@ -15,7 +15,6 @@ _OBJECT: Final = TypeAdapter(dict[str, object])
 
 ANSWER: Final = """\
 {
-  "annotations": [{"term": "breadth", "definition": "how many sectors rose against how many fell"}],
   "claims": [
     {
       "kind": "attribution", "attribution": "the sector fell with it",
@@ -29,9 +28,8 @@ ANSWER: Final = """\
 """
 
 
-def test_a_plain_answer_parses_into_annotations_and_claims() -> None:
+def test_a_plain_answer_parses_into_claims() -> None:
     extracted: Final = parse(ANSWER)
-    assert extracted.annotations[0].term == "breadth"
     assert [claim.kind for claim in extracted.claims] == ["attribution", "expectation"]
     assert extracted.claims[0].mentioned_symbols == ("XLE",)
 
@@ -57,4 +55,4 @@ def test_an_unreadable_answer_yields_nothing_rather_than_raising(unreadable: str
 
 def test_the_schema_names_both_halves_so_the_model_knows_what_to_return() -> None:
     properties: Final = _OBJECT.validate_python(SCHEMA["properties"])
-    assert set(properties) == {"annotations", "claims"}
+    assert set(properties) == {"claims"}

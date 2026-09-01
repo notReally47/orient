@@ -43,13 +43,20 @@ TODAY: Final = date(2026, 8, 12)
 DIMENSIONS: Final = 4
 
 
-def bar_records(count: int = 3, close: float = 100.0) -> Records:
+def bar_records(count: int = 3, close: float = 100.0, gap: float = 0.0) -> Records:
+    """A plain rising series, where each session opens where the last one closed.
+
+    Opening every bar at the same base made each of them gap by a full day's move, which is not
+    what an ordinary session looks like and is not what these fixtures are for: the disclosure
+    check reads the split between the gap and the session, and a fixture that gaps by construction
+    fires it on every test that stores a summary. `gap` is for the tests that want one.
+    """
     return tuple(
         {
             "session_date": date(2026, 8, 10 + offset),
-            "open": close,
-            "high": close,
-            "low": close,
+            "open": close + offset - 1 + gap if offset else close,
+            "high": close + offset + max(gap, 0.0),
+            "low": close + offset - 1 + min(gap, 0.0) if offset else close,
             "close": close + offset,
             "volume": 1_000,
         }
@@ -123,8 +130,6 @@ def _info(symbol: str) -> Mapping[str, object]:
         "marketCap": 3_000_000_000_000,
         "beta": 1.2,
         "trailingPE": 30.0,
-        "fiftyTwoWeekHigh": 260.0,
-        "fiftyTwoWeekLow": 160.0,
         "longBusinessSummary": f"A description of {symbol}.",
     }
 
@@ -161,16 +166,6 @@ def _calls(symbol: str, expiry: str) -> Records:
 def _earnings_events(symbol: str) -> Records:
     del symbol
     return ({"event_date": date(2026, 7, 30), "eps_estimate": 1.4, "reported_eps": 1.5, "surprise_percent": 7.1},)
-
-
-def _estimates(symbol: str) -> Records:
-    del symbol
-    return ({"period": "0q", "average": 1.6, "low": 1.4, "high": 1.8, "analysts": 30, "growth": 0.1},)
-
-
-def _trend(symbol: str) -> Records:
-    del symbol
-    return ({"period": "0q", "current": 1.6, "days_ago_7": 1.59, "days_ago_30": 1.55},)
 
 
 def _revisions(symbol: str) -> Records:
@@ -225,10 +220,10 @@ def _splits_calendar(start: date, end: date) -> Records:
     return ({"symbol": "OLDCO", "company": "Old Co", "payable_on": start, "old_share_worth": 1, "share_worth": 2},)
 
 
-def _prices() -> YahooPrices:
+def _prices(bars: Records | None = None) -> YahooPrices:
     def fetch_one(symbol: str, start: date, end: date) -> Records:
         del symbol, start, end
-        return bar_records(count=3)
+        return bars if bars is not None else bar_records(count=3)
 
     def fetch_many(symbols: Sequence[str], start: date, end: date) -> Mapping[str, Records]:
         del start, end
@@ -260,8 +255,12 @@ def _proxy_handler(request: httpx.Request) -> httpx.Response:
 async def tool_deps(
     pool: FakePool | None = None,
     seen: list[httpx.Request] | None = None,
+    bars: Records | None = None,
 ) -> AsyncGenerator[ToolDeps, None]:
-    """`seen` collects every request that reached the proxy, for asserting what a call carried."""
+    """`seen` collects every request that reached the proxy, for asserting what a call carried.
+
+    `bars` replaces the plain rising series for a test that needs a particular kind of session.
+    """
     store: Final = pool if pool is not None else FakePool()
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -271,13 +270,13 @@ async def tool_deps(
 
     transport: Final = httpx.MockTransport(handler)
     async with httpx.AsyncClient(transport=transport, base_url="http://proxy") as client:
-        prices = CachedPrices(_prices(), BarRepository(as_pool(store)))
+        prices = CachedPrices(_prices(bars), BarRepository(as_pool(store)))
         synthesiser = _Synthesiser()
         yield ToolDeps(
             prices=prices,
             discovery=YahooDiscovery(_lookup, _search, _screen),
             reference=YahooReference(_info, _holdings, _weights, _expiries, _calls),
-            earnings=YahooEarnings(_earnings_events, _estimates, _trend, _revisions, _targets, _actions),
+            earnings=YahooEarnings(_earnings_events, _revisions, _targets, _actions),
             market=YahooMarket(prices, _Series(), _status, lambda: TODAY),
             calendars=YahooCalendars(_earnings_calendar, _economic_calendar, _ipo_calendar, _splits_calendar),
             research=Researcher(SearchClient(client, "exa-search"), synthesiser, "fast-model"),

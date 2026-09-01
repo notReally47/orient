@@ -5,10 +5,36 @@ include:
 router_settings:
   routing_strategy: simple-shuffle
   num_retries: 2
+
+  # Measured, not guessed: a first turn on this workload takes about 57 seconds and the turn after
+  # a skill loads runs past 75, which is where this used to sit. Cutting a call that is still
+  # running does not stop it upstream, it only spends the quota twice and hands the reader a
+  # retry they wait through. Below the client's own 600s bound, so the proxy is still the layer
+  # that gives up first and can retry onto a different key.
+  timeout: 240
   allowed_fails: 3
-  cooldown_time: 60
+  fallbacks:
+    - primary-model: [ "fast-model" ]
+
+  # Every deployment is one API key, so an error is a fact about that key rather than about the
+  # model. A key whose service account has been deleted answers 401 forever, and without a retry
+  # it kills whichever run happens to draw it.
+  retry_policy:
+    AuthenticationErrorRetries: 3
+    RateLimitErrorRetries: 3
+    TimeoutErrorRetries: 2
+    InternalServerErrorRetries: 2
+
+  # How many failures take a key out of rotation. A dead key is dead for good, so one strike;
+  # a rate-limited one has simply spent its daily quota and is equally finished for the day.
   allowed_fails_policy:
+    AuthenticationErrorAllowedFails: 0
     RateLimitErrorAllowedFails: 0
+    TimeoutErrorAllowedFails: 2
+
+  # Long enough that a key removed for the day is not retried every minute. A deleted service
+  # account and an exhausted quota both recover on Google's clock, not on ours.
+  cooldown_time: 900
 
 search_tools:
   - search_tool_name: exa-search
@@ -19,8 +45,6 @@ search_tools:
 litellm_settings:
   drop_params: true
   cache: false
-  # Puts session_id and trace_id on every log line, which is what lets one run's turns be
-  # filtered together in the dashboard rather than read out of a wall of unrelated rows.
   request_correlation_in_logs: true
 
 mcp_servers:

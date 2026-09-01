@@ -15,7 +15,7 @@ from uuid import UUID
 from pydantic import BaseModel
 
 from orient.config import Settings
-from orient.domain.models import Summary, SummaryKey
+from orient.domain.models import Listing, Shelf, Summary, SummaryKey, Written
 from orient.llm.chat import (
     Answered,
     AssistantMessage,
@@ -29,7 +29,7 @@ from orient.llm.chat import (
 from orient.mcp.server import create_server
 from orient.orchestrator.deps import RunDeps
 from orient.orchestrator.events import Event
-from orient.orchestrator.tools import Outcome, Refused, connect
+from orient.orchestrator.tools import Outcome, Refused, Succeeded, connect
 from orient.skills.loader import Skills
 from tests.mcp.fakes import TODAY, tool_deps
 from tests.store.fakes import FakePool
@@ -87,15 +87,52 @@ class ScriptedChat:
 
 
 class Cache:
-    """The one read the loop still owns. Writing happens behind `save_summary` on the server."""
+    """The reads the orchestrator owns: the loop's cache lookup and the listings a front end asks
+    for. Writing happens behind `save_summary` on the tool server, so nothing here can store."""
 
     def __init__(self, cached: Summary | None = None) -> None:
         self.cached: Final = cached
         self.asked: Final[list[SummaryKey]] = []
 
+    def _all(self) -> tuple[Summary, ...]:
+        return () if self.cached is None else (self.cached,)
+
     async def find(self, key: SummaryKey) -> Summary | None:
         self.asked.append(key)
         return self.cached if self.cached is not None and self.cached.key == key else None
+
+    async def browse(
+        self,
+        symbol: str | None = None,
+        level: str | None = None,
+        limit: int = 12,
+        offset: int = 0,
+    ) -> Shelf:
+        matched: Final = tuple(
+            entry
+            for entry in self._all()
+            if (symbol is None or entry.symbol == symbol) and (level is None or entry.level == level)
+        )
+        window: Final = matched[offset : offset + limit]
+        return Shelf(
+            total=len(matched),
+            entries=tuple(
+                Listing(
+                    id=entry.id,
+                    symbol=entry.symbol,
+                    session_date=entry.session_date,
+                    level=entry.level,
+                    thesis=entry.thesis,
+                )
+                for entry in window
+            ),
+        )
+
+    async def written(self) -> tuple[Written, ...]:
+        return tuple(Written(symbol=entry.symbol, count=1, latest=entry.session_date) for entry in self._all())
+
+    async def by_id(self, summary_id: UUID) -> Summary | None:
+        return next((entry for entry in self._all() if entry.id == summary_id), None)
 
 
 class RefusingTools:
@@ -110,6 +147,22 @@ class RefusingTools:
     async def execute(self, name: str, arguments: str, session: str | None = None) -> Outcome:
         del arguments, session
         return Refused(tool=name, detail=self._detail)
+
+
+class RecordingTools:
+    """A catalog that answers emptily and keeps the arguments it was handed, for asserting what
+    a route asked the tool server for rather than what it did with the answer."""
+
+    def __init__(self) -> None:
+        self.calls: Final[list[str]] = []
+
+    def schemas(self) -> tuple[ToolSchema, ...]:
+        return ()
+
+    async def execute(self, name: str, arguments: str, session: str | None = None) -> Outcome:
+        del session
+        self.calls.append(arguments)
+        return Succeeded(tool=name, payload="{}", structured={})
 
 
 class _Ids:
@@ -165,7 +218,7 @@ class Recorder:
 async def run_deps(
     chat: ScriptedChat,
     cache: Cache | None = None,
-    catalog: RefusingTools | None = None,
+    catalog: RefusingTools | RecordingTools | None = None,
     pool: FakePool | None = None,
     **overrides: object,
 ) -> AsyncGenerator[RunDeps, None]:

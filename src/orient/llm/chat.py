@@ -5,7 +5,8 @@ answers instead of standing a transport up. Every answer is a value: a guardrail
 unreachable proxy are outcomes the caller matches on, not exceptions it has to remember to catch.
 """
 
-from collections.abc import Callable, Mapping, Sequence
+import asyncio
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Final, Protocol, assert_never
 
@@ -30,6 +31,11 @@ from orient.llm.limiter import RateLimiter
 GUARDRAIL_BLOCKED: Final = 422
 FEEDBACK_LENGTH: Final = 1500
 DETAIL_LENGTH: Final = 300
+
+TRANSIENT: Final = frozenset({500, 502, 503, 504})
+
+TRANSIENT_ATTEMPTS: Final = 4
+TRANSIENT_WAITS: Final = (5.0, 15.0, 30.0)
 
 
 class ToolCall(Frozen):
@@ -200,10 +206,17 @@ class ProxyChat:
     the global propagator so a test asserts what was sent without standing up a tracer.
     """
 
-    def __init__(self, client: AsyncOpenAI, limiter: RateLimiter, headers: Headers) -> None:
+    def __init__(
+        self,
+        client: AsyncOpenAI,
+        limiter: RateLimiter,
+        headers: Headers,
+        sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
+    ) -> None:
         self._client: Final = client
         self._limiter: Final = limiter
         self._headers: Final = headers
+        self._sleep: Final = sleep
 
     async def complete(
         self,
@@ -215,22 +228,34 @@ class ProxyChat:
         tags: Sequence[str] = (),
         session: str | None = None,
     ) -> Completion:
-        await self._limiter.acquire()
-        try:
-            response = await self._client.chat.completions.create(
-                model=model,
-                messages=[_as_param(message) for message in messages],
-                tools=[_as_tool(entry) for entry in tools] if tools else omit,
-                response_format=omit if schema is None else _json_schema(schema),
-                extra_headers=dict(self._headers()),
-                extra_body=_extras(guardrails, tags, session),
-            )
-        except APIStatusError as exc:
-            if exc.status_code == GUARDRAIL_BLOCKED:
-                return Rejected(feedback=_one_line(exc.response.text, FEEDBACK_LENGTH))
-            return Unavailable(f"HTTP {exc.status_code}: {_one_line(exc.response.text, DETAIL_LENGTH)}")
-        except OpenAIError as exc:
-            return Unavailable(f"{type(exc).__name__}: {_one_line(str(exc), DETAIL_LENGTH)}")
+        """One turn. A refusal or an exhausted quota comes back as a value rather than an exception.
+
+        `Unavailable` is the whole of the failure surface: the loop above decides whether to wait,
+        tell the reader, or stop, and none of those choices belongs to a client.
+        """
+        for attempt in range(TRANSIENT_ATTEMPTS):
+            await self._limiter.acquire()
+            try:
+                response = await self._client.chat.completions.create(
+                    model=model,
+                    messages=[_as_param(message) for message in messages],
+                    tools=[_as_tool(entry) for entry in tools] if tools else omit,
+                    response_format=omit if schema is None else _json_schema(schema),
+                    extra_headers=dict(self._headers()),
+                    extra_body=_extras(guardrails, tags, session),
+                )
+            except APIStatusError as exc:
+                if exc.status_code == GUARDRAIL_BLOCKED:
+                    return Rejected(feedback=_one_line(exc.response.text, FEEDBACK_LENGTH))
+                if exc.status_code in TRANSIENT and attempt < TRANSIENT_ATTEMPTS - 1:
+                    await self._sleep(TRANSIENT_WAITS[attempt])
+                    continue
+                return Unavailable(f"HTTP {exc.status_code}: {_one_line(exc.response.text, DETAIL_LENGTH)}")
+            except OpenAIError as exc:
+                return Unavailable(f"{type(exc).__name__}: {_one_line(str(exc), DETAIL_LENGTH)}")
+            break
+        else:  # pragma: no cover - the loop always returns or breaks
+            return Unavailable("the model stayed unavailable")
 
         if not response.choices:
             return Unavailable("the model returned no choices")

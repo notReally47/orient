@@ -4,16 +4,13 @@ The only place real clients are constructed, and it owns their lifetime. Everyth
 what it needs as an argument.
 """
 
-import argparse
 import sys
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 from typing import Final
 
 import uvicorn
-from openai import AsyncOpenAI
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
-from pydantic import BaseModel, ConfigDict
 
 from orient.config import Settings
 from orient.llm.chat import ProxyChat
@@ -22,44 +19,26 @@ from orient.orchestrator import telemetry
 from orient.orchestrator.app import create_app
 from orient.orchestrator.deps import RunDeps
 from orient.orchestrator.tools import connect
+from orient.serving import listener, proxy_client
 from orient.skills.loader import Skills
 from orient.store.pool import create_pool
 from orient.store.summaries import SummaryRepository
 
 SERVICE_NAME: Final = "orient-orchestrator"
 DEFAULT_PORT: Final = 8000
-DEFAULT_HOST: Final = "127.0.0.1"
-
-
-class Options(BaseModel):
-    """argparse hands back an untyped namespace, so it is validated rather than indexed."""
-
-    model_config = ConfigDict(extra="ignore")
-
-    host: str = DEFAULT_HOST
-    port: int = DEFAULT_PORT
-
-
-def parse(argv: list[str]) -> Options:
-    parser: Final = argparse.ArgumentParser(prog="orient-orchestrator")
-    _ = parser.add_argument("--host", default=DEFAULT_HOST)
-    _ = parser.add_argument("--port", type=int, default=DEFAULT_PORT)
-    return Options.model_validate(vars(parser.parse_args(argv)))
 
 
 @asynccontextmanager
 async def build(settings: Settings) -> AsyncGenerator[RunDeps, None]:
+    """Every real dependency a run needs, opened together and closed together.
+
+    The only place real clients are constructed. Everything below takes what it needs as an
+    argument, which is what makes the layers testable without patching module state.
+    """
     pool: Final = create_pool(settings.database_url)
     limiter: Final = RateLimiter(settings.requests_per_minute)
 
-    async with (
-        AsyncOpenAI(
-            base_url=f"{settings.proxy_base_url}/v1",
-            api_key=settings.proxy_api_key,
-            timeout=settings.request_timeout_seconds,
-        ) as openai,
-        connect(settings.mcp_url) as tools,
-    ):
+    async with proxy_client(settings) as openai, connect(settings.mcp_url) as tools:
         await pool.open(wait=True)
         try:
             yield RunDeps(
@@ -76,14 +55,14 @@ async def build(settings: Settings) -> AsyncGenerator[RunDeps, None]:
 
 
 def main(argv: list[str] | None = None) -> int:
-    args: Final = parse(sys.argv[1:] if argv is None else argv)
+    where: Final = listener("orient-orchestrator", sys.argv[1:] if argv is None else argv, DEFAULT_PORT)
     settings: Final = Settings()  # pyright: ignore[reportCallIssue]  # every field comes from the environment
 
     telemetry.configure(SERVICE_NAME, settings.otlp_endpoint)
     application: Final = create_app(lambda: build(settings))
     FastAPIInstrumentor.instrument_app(application)
 
-    uvicorn.run(application, host=args.host, port=args.port)
+    uvicorn.run(application, host=where.host, port=where.port)
     return 0
 
 

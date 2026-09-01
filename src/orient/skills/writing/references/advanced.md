@@ -1,8 +1,3 @@
----
-name: Advanced level
-description: A regime call, a scannable evidence table, and what would falsify the read, at 350 to 500 words
----
-
 Write for someone who will scan this in under a minute and wants to know whether their read of the
 regime is still right. Explanation is padding here, and the judge scores it as such.
 

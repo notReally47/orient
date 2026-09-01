@@ -33,9 +33,20 @@ class InstrumentRepository:
         data an already published summary was written against, so a symbol already on file is
         left as it is rather than updated."""
         async with self._pool.connection() as connection:
-            _ = await connection.execute(_UPSERT, instrument.model_dump())
+            _ = await connection.execute(
+                _UPSERT,
+                {
+                    "symbol": instrument.symbol,
+                    "asset_class": instrument.asset_class,
+                    "name": instrument.name,
+                    "sector": instrument.sector,
+                    "exchange": instrument.exchange,
+                    "currency": instrument.currency,
+                },
+            )
 
     async def get(self, symbol: str) -> Instrument | None:
+        """What is known about one instrument, or nothing if it has never been summarised."""
         async with self._pool.connection() as connection, connection.cursor(row_factory=dict_row) as cursor:
             _ = await cursor.execute(_SELECT, {"symbol": symbol})
             row = await cursor.fetchone()

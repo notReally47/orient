@@ -11,12 +11,12 @@ from typing import Final
 from uuid import UUID
 
 from orient.domain.models import (
-    Annotation,
     ReadingLevel,
     Returns,
     Section,
     Signals,
     Summary,
+    Term,
     TrendDistance,
 )
 from orient.orchestrator.agent import RunRequest, run
@@ -67,7 +67,7 @@ def _stored() -> Summary:
             returns=Returns(),
             trend=TrendDistance(),
         ),
-        annotations=(Annotation(term="breadth", definition="how many rose against how many fell"),),
+        glossary=(Term(term="breadth", meaning="how many rose against how many fell"),),
     )
 
 

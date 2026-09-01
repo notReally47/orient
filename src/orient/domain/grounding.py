@@ -22,17 +22,10 @@ from typing import Final, cast
 
 MAX_REPORTED: Final = 10
 
-# A fraction quoted as a percent, and a large figure quoted in thousands through trillions.
 SCALES: Final = (1.0, 100.0, 1e-3, 1e-6, 1e-9, 1e-12)
 
-# Window lengths the skills name, plus the counts prose uses to describe them: twelve months is
-# a year, thirty days is the horizon the VIX is defined over, and a hundred is how a fraction
-# becomes a percentage. Structure rather than measurement, so none of them needs an origin.
-WINDOWS: Final = frozenset({1.0, 2.0, 5.0, 10.0, 12.0, 20.0, 30.0, 50.0, 52.0, 100.0, 200.0, 252.0})
+WINDOWS: Final = frozenset({1.0, 2.0, 5.0, 8.0, 10.0, 12.0, 20.0, 30.0, 50.0, 52.0, 60.0, 100.0, 200.0, 252.0})
 
-# A thousands separator sits between digits, never after the last one. Without the lookahead
-# the class swallows the comma that ends a clause, so "August 16, South Korea" reports the
-# unmatched figure as "16," and the writer is asked to fix a number it never wrote.
 _NUMERAL: Final = re.compile(r"\d(?:,(?=\d)|\d)*(?:\.\d+)?")
 _SAFETY: Final = 1e-9
 

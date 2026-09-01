@@ -50,6 +50,17 @@ class BarRepository:
         """Existing rows are left alone, because a past session's bar cannot have changed."""
         if not bars:
             return
-        parameters: Final = [{"symbol": symbol, **bar.model_dump()} for bar in bars]
+        parameters: Final = [
+            {
+                "symbol": symbol,
+                "session_date": bar.session_date,
+                "open": bar.open,
+                "high": bar.high,
+                "low": bar.low,
+                "close": bar.close,
+                "volume": bar.volume,
+            }
+            for bar in bars
+        ]
         async with self._pool.connection() as connection, connection.cursor() as cursor:
             await cursor.executemany(_UPSERT, parameters)

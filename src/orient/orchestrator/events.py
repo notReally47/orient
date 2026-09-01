@@ -15,8 +15,6 @@ from sse_starlette import ServerSentEvent
 
 from orient.domain.models import Frozen, ReadingLevel, RunStatus, SummaryStatus
 
-Rejection = Literal["grounding", "judge"]
-
 
 class RunStarted(Frozen):
     kind: Literal["run_started"] = "run_started"

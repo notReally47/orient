@@ -28,11 +28,13 @@ CREATE TABLE IF NOT EXISTS sessions
     session_date    date        NOT NULL,
     signals_version text        NOT NULL,
     signals         jsonb       NOT NULL,
+    shape           vector(21),
     created_at      timestamptz NOT NULL DEFAULT now(),
     PRIMARY KEY (symbol, session_date, signals_version)
 );
 
 CREATE INDEX IF NOT EXISTS sessions_symbol_date ON sessions (symbol, session_date DESC);
+CREATE INDEX IF NOT EXISTS sessions_shape ON sessions USING hnsw (shape vector_l2_ops);
 
 CREATE TABLE IF NOT EXISTS summaries
 (
@@ -43,12 +45,15 @@ CREATE TABLE IF NOT EXISTS summaries
     status           text        NOT NULL CHECK (status IN ('ok', 'caveated')),
     thesis           text        NOT NULL DEFAULT '',
     sections         jsonb       NOT NULL,
-    annotations      jsonb       NOT NULL DEFAULT '[]'::jsonb,
+    glossary         jsonb       NOT NULL DEFAULT '[]'::jsonb,
     calendar         jsonb       NOT NULL DEFAULT '[]'::jsonb,
+    holdings         jsonb       NOT NULL DEFAULT '[]'::jsonb,
+    reactions        jsonb       NOT NULL DEFAULT '[]'::jsonb,
+    layout           jsonb       NOT NULL DEFAULT '[]'::jsonb,
+    tiles            jsonb       NOT NULL DEFAULT '[]'::jsonb,
     signals_snapshot jsonb       NOT NULL,
     signals_version  text        NOT NULL,
     skill_version    text        NOT NULL,
-    pinned           boolean     NOT NULL DEFAULT false,
     trace_id         text,
     created_at       timestamptz NOT NULL DEFAULT now()
 );
@@ -57,7 +62,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS summaries_cache_key
     ON summaries (symbol, session_date, level, signals_version, skill_version);
 
 CREATE INDEX IF NOT EXISTS summaries_recent ON summaries (symbol, session_date DESC);
-CREATE INDEX IF NOT EXISTS summaries_pinned ON summaries (created_at DESC) WHERE pinned;
+CREATE INDEX IF NOT EXISTS summaries_browse ON summaries (session_date DESC, created_at DESC);
 
 CREATE TABLE IF NOT EXISTS claims
 (

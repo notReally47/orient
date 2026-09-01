@@ -1,6 +1,6 @@
 """The market adapter, driven with the payloads Yahoo really returns.
 
-The session payload is the one `make shapes` prints: the bounds already parsed into datetimes,
+The session payload is the one `make dump` prints: the bounds already parsed into datetimes,
 and the zone nested inside an object beside its offset rather than sitting flat as a string. The
 value types are the point. A test written against the names alone passed while the live call
 failed, which is why every field here carries the type Yahoo sends.
@@ -12,7 +12,8 @@ from types import MappingProxyType
 from typing import Final
 
 from orient.domain.models import Bar, Observation
-from orient.providers.yahoo.market import SECTOR_ETFS, YahooMarket
+from orient.providers.yahoo import boards
+from orient.providers.yahoo.market import YahooMarket
 
 EASTERN: Final = timezone(timedelta(hours=-4), "EDT")
 TODAY: Final = date(2026, 8, 12)
@@ -31,9 +32,21 @@ STATUS: Final[Mapping[str, object]] = {
 }
 
 
+_US: Final = boards.BOARDS[boards.US]
+
+
 def _bars(*closes: float) -> tuple[Bar, ...]:
+    """Ending on the session being asked about, because a series that stops short of it describes
+    a different day and is now dropped rather than relabelled."""
     return tuple(
-        Bar(session_date=date(2026, 8, 10 + offset), open=100.0, high=100.0, low=100.0, close=close, volume=1_000)
+        Bar(
+            session_date=TODAY - timedelta(days=len(closes) - 1 - offset),
+            open=100.0,
+            high=100.0,
+            low=100.0,
+            close=close,
+            volume=1_000,
+        )
         for offset, close in enumerate(closes)
     )
 
@@ -105,7 +118,7 @@ async def test_the_whole_backdrop_is_fetched_in_one_request() -> None:
     _ = await YahooMarket(prices, _Series({}), lambda _: STATUS, lambda: TODAY).backdrop(TODAY)
 
     assert len(prices.asked) == 1
-    assert set(SECTOR_ETFS) <= set(prices.asked[0])
+    assert set(_US.sectors) <= set(prices.asked[0])
     assert "^VIX" in prices.asked[0]
 
 
@@ -144,15 +157,14 @@ async def test_breadth_is_counted_over_the_sectors_that_were_priced() -> None:
 
     assert breadth is not None
     assert (breadth.advancers, breadth.decliners, breadth.unchanged, breadth.total) == (1, 1, 1, 3)
-    assert breadth.top[0].symbol == "XLK"
 
 
 async def test_every_sector_in_the_basket_is_named_whether_or_not_it_priced() -> None:
     """The prose says sector, so a fund missing from the answer would read as a sector that did not move."""
     moves: Final = (await _market().backdrop(TODAY)).sectors
 
-    assert {move.symbol for move in moves} == set(SECTOR_ETFS)
-    assert all(move.name == SECTOR_ETFS[move.symbol] for move in moves)
+    assert {move.symbol for move in moves} == set(_US.sectors)
+    assert all(move.name == _US.sectors[move.symbol] for move in moves)
 
 
 async def test_the_region_asked_for_is_the_one_configured() -> None:
@@ -165,3 +177,17 @@ async def test_the_region_asked_for_is_the_one_configured() -> None:
     _ = await YahooMarket(_Prices({}), _Series({}), status, lambda: TODAY, "GB").backdrop(TODAY)
 
     assert asked == ["GB"]
+
+
+async def test_a_series_that_stops_short_of_the_session_reports_no_move() -> None:
+    """A vendor publishes sector funds on its own schedule, so on some mornings they are a day
+    behind the instrument. Taking the last two closes regardless labelled yesterday's move as
+    today's, which is the one error a reader cannot possibly catch."""
+    stale: Final = tuple(
+        Bar(session_date=TODAY - timedelta(days=offset + 1), open=100.0, high=100.0, low=100.0, close=close, volume=1)
+        for offset, close in enumerate((104.0, 100.0))
+    )
+
+    moves: Final = (await _market({"XLK": tuple(reversed(stale))}).backdrop(TODAY)).sectors
+
+    assert all(move.change_percent is None for move in moves)

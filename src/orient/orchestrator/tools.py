@@ -81,6 +81,16 @@ class McpTools:
         return self._schemas
 
     async def execute(self, name: str, arguments: str, session: str | None = None) -> Outcome:
+        """Call one tool by name, answering with a value whatever happens.
+
+        An unknown name, unparseable arguments and a tool that raised are all outcomes rather than
+        exceptions, because one failed tool is not a reason to end a run that has spent eight turns.
+        """
+        """Call one tool by name, answering with a value whatever happens.
+
+        An unknown name, unparseable arguments and a tool that raised are all outcomes rather than
+        exceptions, because one failed tool is not a reason to end a run that has spent eight turns.
+        """
         if name not in self._served:
             return Refused(tool=name, detail=f"no such tool; served are {sorted(self._served)}")
 

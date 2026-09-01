@@ -1,4 +1,4 @@
-"""The formatter behind `make shapes`.
+"""The formatter behind `make dump`.
 
 Its output is what the typed providers get written against, so a description that hides a
 column or silently truncates without saying so would send the models off in the wrong
@@ -130,7 +130,6 @@ def test_the_dump_covers_every_surface_the_tools_need() -> None:
         "funds_data",
         "Market",
         "earnings_dates",
-        "eps_trend",
         "analyst_price_targets",
         "option_chain",
         "earnings_calendar",

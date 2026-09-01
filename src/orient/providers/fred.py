@@ -25,6 +25,7 @@ class FredProvider:
         self._fetch: Final = fetch
 
     async def observations(self, series_id: str, start: date, end: date) -> tuple[Observation, ...]:
+        """One series over a window, with the periods the agency has not published yet left out."""
         fetched: Final = await to_thread.run_sync(partial(self._fetch, series_id, start, end))
         published: Final = tuple(record for record in fetched if not _is_missing(record.get("value")))
         return _OBSERVATIONS.validate_python(published)

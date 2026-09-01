@@ -10,7 +10,7 @@ from datetime import date, timedelta
 from typing import Final
 
 from orient.domain.models import Bar
-from orient.providers.cache import GAP_TOLERANCE, CachedPrices
+from orient.providers.cache import HEAD_TOLERANCE, CachedPrices
 
 SYMBOL: Final = "^GSPC"
 OTHER: Final = "^VIX"
@@ -85,7 +85,7 @@ async def test_an_empty_table_asks_for_the_whole_window_and_writes_it_back() -> 
 
 async def test_only_the_missing_tail_is_fetched_when_the_table_stops_short() -> None:
     """A window that already reaches back far enough must not refetch the part it has."""
-    stored_last: Final = END - GAP_TOLERANCE - timedelta(days=3)
+    stored_last: Final = END - timedelta(days=3)
     store: Final = _Store({SYMBOL: _span(START, stored_last)})
     source: Final = _Source({SYMBOL: _span(START, END)})
 
@@ -95,7 +95,7 @@ async def test_only_the_missing_tail_is_fetched_when_the_table_stops_short() -> 
 
 
 async def test_only_the_missing_head_is_fetched_when_the_table_starts_late() -> None:
-    stored_first: Final = START + GAP_TOLERANCE + timedelta(days=3)
+    stored_first: Final = START + HEAD_TOLERANCE + timedelta(days=3)
     store: Final = _Store({SYMBOL: _span(stored_first, END)})
     source: Final = _Source({SYMBOL: _span(START, END)})
 
@@ -104,14 +104,57 @@ async def test_only_the_missing_head_is_fetched_when_the_table_starts_late() -> 
     assert source.windows == [(SYMBOL, START, stored_first - timedelta(days=1))]
 
 
-async def test_a_weekend_shaped_hole_is_not_mistaken_for_missing_data() -> None:
-    """Markets shut. A bar that never existed must not cost a request on every later run."""
-    stored: Final = _span(START, END - timedelta(days=2))
-    source: Final = _Source({SYMBOL: _span(START, END)})
+FRIDAY: Final = date(2026, 8, 21)
+SATURDAY_AFTER: Final = date(2026, 8, 22)
+SUNDAY_AFTER: Final = date(2026, 8, 23)
+MONDAY_AFTER: Final = date(2026, 8, 24)
+TUESDAY_AFTER: Final = date(2026, 8, 25)
 
-    _ = await CachedPrices(source, _Store({SYMBOL: stored})).bars(SYMBOL, START, END)
+
+def _weekdays(first: date, last: date) -> tuple[Bar, ...]:
+    """A week of an instrument that does not trade weekends, which is most of them."""
+    return tuple(bar for bar in _span(first, last) if bar.session_date.weekday() < 5)
+
+
+async def test_a_weekend_costs_no_request_because_nothing_traded_over_it() -> None:
+    """Markets shut. A bar that never existed must not cost a request on every later run."""
+    stored: Final = _weekdays(START, FRIDAY)
+    source: Final = _Source({SYMBOL: _weekdays(START, FRIDAY)})
+
+    _ = await CachedPrices(source, _Store({SYMBOL: stored})).bars(SYMBOL, START, SUNDAY_AFTER)
 
     assert source.windows == []
+
+
+async def test_todays_unfinished_session_costs_no_request_either() -> None:
+    """Asking for a bar that will not exist until the close is a request on every page view."""
+    stored: Final = _weekdays(START, MONDAY_AFTER)
+    source: Final = _Source({SYMBOL: _weekdays(START, MONDAY_AFTER)})
+
+    _ = await CachedPrices(source, _Store({SYMBOL: stored})).bars(SYMBOL, START, TUESDAY_AFTER)
+
+    assert source.windows == []
+
+
+async def test_a_session_that_has_been_and_gone_is_fetched() -> None:
+    """The bug this guards: a Tuesday accepting a Friday tail leaves Monday's close unfetched,
+    and the front end then offers the Friday as the most recent close it can summarise."""
+    stored: Final = _weekdays(START, FRIDAY)
+    source: Final = _Source({SYMBOL: _weekdays(START, MONDAY_AFTER)})
+
+    _ = await CachedPrices(source, _Store({SYMBOL: stored})).bars(SYMBOL, START, TUESDAY_AFTER)
+
+    assert source.windows == [(SYMBOL, SATURDAY_AFTER, TUESDAY_AFTER)]
+
+
+async def test_an_instrument_that_trades_the_weekend_picks_its_saturday_up() -> None:
+    """Crypto has no weekend to skip, and the rows on file are what say so."""
+    stored: Final = _span(START, FRIDAY)
+    source: Final = _Source({SYMBOL: _span(START, SUNDAY_AFTER)})
+
+    _ = await CachedPrices(source, _Store({SYMBOL: stored})).bars(SYMBOL, START, SUNDAY_AFTER)
+
+    assert source.windows == [(SYMBOL, SATURDAY_AFTER, SUNDAY_AFTER)]
 
 
 async def test_a_stored_bar_wins_over_a_refetched_one() -> None:

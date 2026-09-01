@@ -32,6 +32,8 @@ EXPECTED_TOOLS: Final = frozenset(
         "search_news",
         "recall_history",
         "search_knowledge",
+        "find_similar_sessions",
+        "check_summary",
         "save_summary",
     }
 )
@@ -69,6 +71,7 @@ async def test_each_schema_carries_what_the_model_needs_to_choose() -> None:
         ("get_calendar", '{"session_date": "2026-08-12"}'),
         ("search_news", '{"questions": ["why did the S&P 500 fall"]}'),
         ("search_knowledge", '{"query": "breadth narrow while volatility stayed low"}'),
+        ("find_similar_sessions", '{"symbol": "AAPL", "session_date": "2026-08-12"}'),
     ],
 )
 async def test_every_tool_answers_within_the_schema_it_declared(tool: str, arguments: str) -> None:

@@ -26,6 +26,7 @@ from orient.probe import (
     check_embeddings,
     check_fred,
     check_guardrails,
+    check_gui,
     check_headroom,
     check_jaeger,
     check_orchestrator,
@@ -119,12 +120,23 @@ def _deps(
         proxy_master_key="sk-test",
         mcp_url="http://mcp.test/mcp",
         proxy=client,
+        gui=client,
         headroom=client,
         jaeger=client,
         orchestrator=client,
         prices=prices or _Prices(),
         series=series or _Series(),
     )
+
+
+def _text_handler(body: str) -> Handler:
+    """A page rather than a payload, which is what the front end serves."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        del request
+        return httpx.Response(200, text=body)
+
+    return handler
 
 
 def _json_handler(payload: object, status: int = 200) -> Handler:
@@ -402,6 +414,7 @@ def _refusing_handler(request: httpx.Request) -> httpx.Response:
         check_chat_completion,
         check_embeddings,
         check_search,
+        check_gui,
         check_headroom,
         check_jaeger,
         check_orchestrator,
@@ -437,3 +450,17 @@ def test_report_refuses_to_declare_success_when_anything_failed() -> None:
 def test_report_declares_success_when_only_warnings_remain() -> None:
     results: Final = (Passed("one", "ok"), Warned("two", "later"))
     assert "All 2 checks passed." in format_report(results)
+
+
+def test_the_gui_fails_when_the_body_is_not_a_streamlit_page() -> None:
+    """Streamlit answers before the script has run, so a page that imports badly still looks up."""
+    result: Final = check_gui(_deps(_text_handler("<html><body>nothing here</body></html>")))
+
+    assert isinstance(result, Failed)
+    assert "not a Streamlit page" in result.detail
+
+
+def test_the_gui_passes_when_it_serves_its_own_page() -> None:
+    result: Final = check_gui(_deps(_text_handler('<script src="/static/js/streamlit.js"></script>')))
+
+    assert isinstance(result, Passed)

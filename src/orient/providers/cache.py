@@ -6,7 +6,10 @@ anything either of them is aware of, and this is the working instance of that: i
 missing. Nothing above learns a cache exists.
 
 A daily bar for a past session never changes, which is what makes this safe to cache without an
-expiry. Only the near edge moves, as today's session closes, so only the near edge is refetched.
+expiry. Only the near edge moves, as today's session closes, so only the near edge is refetched,
+and the two ends are given different amounts of slack because they fail in different directions:
+missing history is a shorter chart, while a missing newest bar is a wrong answer to "when did
+this last trade".
 """
 
 from collections.abc import Mapping, Sequence
@@ -16,9 +19,41 @@ from typing import Final, Protocol
 from orient.domain.models import Bar
 from orient.providers.protocols import Prices
 
-# A stored window is complete when it reaches this close to each end. Markets shut for weekends
-# and holidays, so the absence of a bar is not evidence that one is missing.
-GAP_TOLERANCE: Final = timedelta(days=4)
+HEAD_TOLERANCE: Final = timedelta(days=4)
+
+SATURDAY: Final = 5
+
+
+def _trades_weekends(stored: Sequence[Bar]) -> bool:
+    """Whether this instrument has ever closed on a Saturday or Sunday.
+
+    The instrument's own history is the only calendar available here, and for this question it is
+    enough: an equity index has no weekend bars and a cryptocurrency has nothing but. Reading it
+    off the rows keeps the cache from having to be told which is which.
+    """
+    return any(bar.session_date.weekday() >= SATURDAY for bar in stored)
+
+
+def _sessions_missed(stored: Sequence[Bar], end: date) -> bool:
+    """Whether a day this instrument would have traded has gone by since the newest stored bar.
+
+    The near edge cannot be given the same slack as the far one. Four days of it is enough to
+    swallow a whole session: a Tuesday asking for a window that ends today accepts a stored tail
+    of Friday, never fetches Monday, and leaves the newest session on file a day behind for most
+    of the week — which is how the front end came to offer a Friday as the last close.
+
+    `end` itself is excluded because it is usually today, and today's bar does not exist until
+    today's session closes. Counting it would mean a vendor request on every page view. What is
+    counted instead is the days in between, against this instrument's own trading week, so a
+    weekend costs an equity index nothing and still lets a cryptocurrency pick up its Saturday.
+    """
+    weekends: Final = _trades_weekends(stored)
+    day = stored[-1].session_date + timedelta(days=1)
+    while day < end:
+        if weekends or day.weekday() < SATURDAY:
+            return True
+        day += timedelta(days=1)
+    return False
 
 
 class BarStore(Protocol):
@@ -35,8 +70,8 @@ def _gap(stored: Sequence[Bar], start: date, end: date) -> tuple[date, date] | N
     """
     if not stored:
         return (start, end)
-    head: Final = stored[0].session_date > start + GAP_TOLERANCE
-    tail: Final = stored[-1].session_date < end - GAP_TOLERANCE
+    head: Final = stored[0].session_date > start + HEAD_TOLERANCE
+    tail: Final = _sessions_missed(stored, end)
     match (head, tail):
         case (True, True):
             return (start, end)
@@ -60,6 +95,7 @@ class CachedPrices:
         self._store: Final = store
 
     async def bars(self, symbol: str, start: date, end: date) -> tuple[Bar, ...]:
+        """Bars for the window, fetching only the part the store does not already hold."""
         stored: Final = await self._store.between(symbol, start, end)
         window: Final = _gap(stored, start, end)
         if window is None:

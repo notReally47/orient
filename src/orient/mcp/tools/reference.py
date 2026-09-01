@@ -1,17 +1,39 @@
 """What an instrument is, what analysts expect of it, and what is scheduled."""
 
 from datetime import date, timedelta
-from typing import Annotated
+from typing import Annotated, Final
 
 from mcp.server import MCPServer
 from pydantic import Field
 
-from orient.domain.market import EarningsDetail, InstrumentProfile
-from orient.domain.models import Calendar, CalendarKind
+from orient.domain import signals
+from orient.domain.market import EarningsDetail, EarningsReaction, InstrumentProfile
+from orient.domain.models import Bar, Calendar
 from orient.mcp.deps import ToolDeps
+
+REACTION_MARGIN = timedelta(days=10)
 
 DEFAULT_CALENDAR_DAYS = 7
 MAX_CALENDAR_DAYS = 60
+
+
+async def _reactions(deps: ToolDeps, symbol: str, detail: EarningsDetail) -> tuple[EarningsReaction, ...]:
+    """How the shares took the last few reports, from the dates and the bars already in hand.
+
+    No new vendor surface: the report dates arrived with the rest of the earnings detail and the
+    closes are the same series every other measurement is built from. What it adds is the only
+    earnings fact that is about the trade rather than about the business — a name sold on three
+    of its last four prints is carrying something into the next one.
+    """
+    reported: Final[tuple[date, ...]] = tuple(
+        event.event_date for event in detail.events if event.reported_eps is not None
+    )
+    if not reported:
+        return ()
+    bars: Final[tuple[Bar, ...]] = await deps.prices.bars(
+        symbol, min(reported) - REACTION_MARGIN, max(reported) + REACTION_MARGIN
+    )
+    return signals.reactions(reported, bars)
 
 
 def register(server: MCPServer, deps: ToolDeps) -> None:
@@ -19,11 +41,14 @@ def register(server: MCPServer, deps: ToolDeps) -> None:
     async def get_instrument_profile(
         symbol: Annotated[str, Field(description="A ticker such as 'AAPL' or 'SPY'")],
     ) -> InstrumentProfile:
-        """What an instrument is: its classification, sector, size and valuation.
+        """What an instrument is: asset class, sector, size, valuation, and what a fund holds.
 
-        Dispatches on asset class inside the call, so an ETF comes back with its holdings and
-        sector weights while an equity comes back with its fundamentals. Fields a vendor does not
-        publish for a given class are null rather than missing.
+        Call this first. It depends on nothing, and the asset class it returns decides which of
+        the remaining tools this instrument's session needs and which guidance applies to it.
+
+        What comes back follows the class: a fund carries holdings and sector weights, an equity
+        carries sector, industry, beta and the two price-to-earnings ratios. There is no income
+        statement, balance sheet or short interest in any of them.
         """
         return await deps.reference.profile(symbol)
 
@@ -43,6 +68,7 @@ def register(server: MCPServer, deps: ToolDeps) -> None:
         should ever say about options.
         """
         detail = await deps.earnings.detail(symbol)
+        detail = detail.model_copy(update={"reactions": await _reactions(deps, symbol, detail)})
         if spot is None or spot <= 0:
             return detail
 
@@ -59,21 +85,18 @@ def register(server: MCPServer, deps: ToolDeps) -> None:
             int,
             Field(description="How far ahead to look", ge=1, le=MAX_CALENDAR_DAYS),
         ] = DEFAULT_CALENDAR_DAYS,
-        kinds: Annotated[
-            tuple[CalendarKind, ...] | None,
-            Field(description="Limit to some of earnings, economic, ipo, split. All four when unset"),
-        ] = None,
     ) -> Calendar:
-        """What is scheduled in the days ahead, across earnings, economic releases, IPOs and splits.
+        """Company results scheduled in the days ahead, soonest first.
 
-        One list sorted soonest first and tagged by kind, so there is no need to choose a calendar
-        before knowing what is on it. `unreadable` counts rows the vendor sent in a shape this layer
-        could not read: above zero, the list is short and should be described as incomplete rather
-        than as a quiet week.
+        Earnings and nothing else: the vendor's economic, IPO and split surfaces answered too
+        badly to serve. A thin answer therefore means a quiet week *for earnings*, and "nothing is
+        scheduled this week" overstates what was checked. Inflation, employment and policy are
+        published rather than scheduled and live in `get_market_context` under `macro`.
+
+        `unreadable` above zero means rows arrived in a shape this layer could not read, so the
+        list is short: describe it as incomplete rather than as a quiet week.
         """
         end = session_date + timedelta(days=days)
-        if kinds is None:
-            return await deps.calendars.entries(session_date, end)
-        return await deps.calendars.entries(session_date, end, kinds)
+        return await deps.calendars.entries(session_date, end)
 
     _ = (get_instrument_profile, get_earnings_detail, get_calendar)

@@ -129,5 +129,5 @@ async def test_rating_actions_are_truncated_to_the_recent_ones() -> None:
         del symbol
         return {"mean": 240.0}
 
-    earnings: Final = YahooEarnings(empty, empty, empty, empty, targets, many)
+    earnings: Final = YahooEarnings(empty, empty, targets, many)
     assert len((await earnings.detail("AAPL", recent=5)).recent_actions) == 5

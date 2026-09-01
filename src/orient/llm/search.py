@@ -14,15 +14,8 @@ from orient.domain.market import NewsArticle
 
 DEFAULT_RESULTS: Final = 5
 
-# A search is not a completion, so its spend row carries no tokens and would otherwise be
-# indistinguishable from anyone else's. Headers are the only way to label a non-chat endpoint:
-# these say what kind of call it was, and the session header says which run it belonged to.
 TAGS: Final = ("phase:research",)
 
-# One of Exa's own categories, forwarded by the proxy alongside the parameters it defines itself.
-# Unrestricted, a question about a session returns the instrument's own landing pages and undated
-# explainers as readily as reporting, and a reader given those correctly answers that the articles
-# do not say. Asked for news, the same question comes back with same-day reporting about the move.
 CATEGORY: Final = "news"
 
 
@@ -71,6 +64,7 @@ class SearchClient:
         count: int = DEFAULT_RESULTS,
         session: str | None = None,
     ) -> tuple[NewsArticle, ...]:
+        """Reporting about one question, restricted to news rather than to whatever ranks."""
         response: Final = await self._client.post(
             f"/v1/search/{self._tool_name}",
             json={"query": query, "max_results": count, "category": CATEGORY},

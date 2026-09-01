@@ -63,6 +63,11 @@ class Researcher:
         self._per_question: Final = per_question
 
     async def investigate(self, questions: Sequence[str], session: str | None = None) -> NewsFindings:
+        """Every question answered in one round trip, with the ones that found nothing named.
+
+        Duplicates are dropped and the list is capped, so a writer cannot spend the run's budget on
+        the same question asked six ways.
+        """
         asked: Final = tuple(dict.fromkeys(questions))[:MAX_QUESTIONS]
         results: Final[dict[str, tuple[NewsArticle, ...]]] = {}
         failed: Final[list[str]] = []

@@ -7,7 +7,7 @@ reaches for one. That keeps the decision beside the code that knows it blocks.
 from collections.abc import Callable, Mapping, Sequence
 from datetime import date
 from functools import partial
-from math import isnan
+from math import isfinite
 from typing import Final
 
 from anyio import to_thread
@@ -22,14 +22,31 @@ FetchOne = Callable[[str, date, date], Records]
 FetchMany = Callable[[Sequence[str], date, date], Mapping[str, Records]]
 
 
-def _traded(record: Mapping[str, object]) -> bool:
-    """A batched download pads every symbol to a shared calendar, marking the gaps NaN.
+PRICES: Final = ("open", "high", "low", "close")
 
-    Only NaN is dropped. A close that is absent rather than not-a-number means the column
-    moved, which must still fail validation instead of quietly shortening the series.
+
+def _priced(value: object) -> bool:
+    """A cell holding a number, which excludes both ways a frame says it holds nothing.
+
+    A single-symbol fetch maps the frame's NaN to None on the way out; a batched one does not, so
+    NaN arrives intact. Both must be caught here: pydantic accepts NaN as a float, so a row that
+    slips through becomes a bar whose close is NaN, and the first thing that notices is Postgres
+    refusing to store a vector built from it, several layers away.
     """
-    close: Final = record.get("close")
-    return not (isinstance(close, float) and isnan(close))
+    return isinstance(value, (int, float)) and not isinstance(value, bool) and isfinite(value)
+
+
+def _traded(record: Mapping[str, object]) -> bool:
+    """Whether this row is a session that printed prices.
+
+    Two kinds of row are not. A batched download pads every symbol to a shared calendar, and the
+    vendor also emits a stub for a session that has opened its books but not yet traded: volume
+    populated, every price empty.
+
+    A column that is missing entirely is a different thing, and still fails validation rather than
+    quietly shortening the series.
+    """
+    return all(_priced(record[field]) for field in PRICES if field in record)
 
 
 def _bars(records: Records) -> tuple[Bar, ...]:

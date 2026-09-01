@@ -14,8 +14,6 @@ from orient import correlation
 
 Vectors = tuple[tuple[float, ...], ...]
 
-# An embeddings row reports its tokens but not what asked for them. The tag is what
-# separates their spend from the completions beside it in the same run.
 TAGS: Final = ("phase:embed",)
 
 
@@ -43,6 +41,12 @@ class EmbeddingClient:
         self._dimensions: Final = dimensions
 
     async def embed(self, texts: Sequence[str], session: str | None = None) -> Vectors:
+        """One vector per text, in the order the texts were given.
+
+        The provider is free to answer out of order, so the response is sorted by its own index
+        before anything is returned. Getting that wrong attaches each vector to the wrong claim and
+        nothing downstream can detect it.
+        """
         if not texts:
             return ()
 
@@ -53,8 +57,6 @@ class EmbeddingClient:
             raise EmbeddingError(message)
 
         payload: Final = _Payload.model_validate_json(response.content)
-        # Ordered by the provider's own index rather than arrival: a reordered response would
-        # otherwise attach each vector to the wrong claim, and nothing downstream could detect it.
         ordered: Final = sorted(payload.data, key=lambda entry: entry.index)
         vectors: Final = tuple(tuple(entry.embedding) for entry in ordered)
 

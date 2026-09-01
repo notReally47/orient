@@ -5,7 +5,7 @@ recorded from a draft that was later revised away. It runs on the fast model bec
 finished prose back is a cheaper job than writing it.
 
 The answer is JSON, and it is validated rather than indexed: an extraction that does not fit the
-schema costs the run its annotations, never a malformed row in `claims`.
+schema costs the run its claims, never a malformed row in the table.
 """
 
 from collections.abc import Mapping
@@ -14,7 +14,7 @@ from typing import Final
 
 from pydantic import TypeAdapter, ValidationError
 
-from orient.domain.models import Annotation, ClaimKind, Frozen
+from orient.domain.models import ClaimKind, Frozen
 
 FENCE: Final = "```"
 
@@ -28,7 +28,6 @@ class ExtractedClaim(Frozen):
 
 
 class Extraction(Frozen):
-    annotations: tuple[Annotation, ...] = ()
     claims: tuple[ExtractedClaim, ...] = ()
 
 

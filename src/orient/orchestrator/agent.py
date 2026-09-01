@@ -58,8 +58,6 @@ SAVE_TOOL: Final = "save_summary"
 ACTIVATE_TOOL: Final = "activate_skill"
 RESOURCE_TOOL: Final = "read_skill_resource"
 
-# Quality review happens inside `save_summary`, because a summary travels as a tool-call
-# argument and the proxy's post-call judge only ever sees assistant text.
 GUARDRAILS: Final = ("headroom-compression", "tool-budget")
 
 _JSON: Final = TypeAdapter(dict[str, object])
@@ -117,6 +115,11 @@ class _Run:
         )
 
     async def execute(self) -> None:
+        """Drive one run from the first model call to a stored summary, emitting as it goes.
+
+        Nothing here decides what to research. The model does, and this loop carries its tool calls,
+        enforces the turn ceiling, and reports whatever stopped it.
+        """
         await self._emit(
             RunStarted(
                 run_id=self._id,

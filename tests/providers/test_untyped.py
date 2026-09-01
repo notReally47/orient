@@ -104,3 +104,45 @@ def test_a_crumb_rejected_twice_is_reported_rather_than_retried_forever(
         _ = _untyped.yahoo_earnings_calendar(START, END)
 
     assert yahoo.attempts == 2
+
+
+class _LookupFrame:
+    """A frame with the values pandas writes into cells that hold nothing."""
+
+    def reset_index(self) -> "_LookupFrame":
+        return self
+
+    def to_dict(self, orient: str) -> list[dict[str, object]]:
+        del orient
+        return [
+            {
+                "symbol": "AAPL",
+                "shortName": "Apple Inc.",
+                "quoteType": "EQUITY",
+                "industryName": float("nan"),
+                "regularMarketPrice": 200.0,
+                "regularMarketPercentChange": float("nan"),
+            }
+        ]
+
+
+class _Lookup:
+    def __init__(self, query: str) -> None:
+        del query
+
+    def get_all(self, count: int) -> _LookupFrame:
+        del count
+        return _LookupFrame()
+
+
+def test_a_cell_the_vendor_left_empty_arrives_as_nothing(monkeypatch: pytest.MonkeyPatch) -> None:
+    """pandas writes NaN into an empty cell, and a field typed as text rejects it, so one blank
+    column would otherwise cost the whole search rather than its own value."""
+    monkeypatch.setattr(yf, "Lookup", _Lookup)
+
+    rows: Final = _untyped.yahoo_lookup("aapl", "all", 5)
+
+    assert rows[0]["symbol"] == "AAPL"
+    assert rows[0]["industry"] is None
+    assert rows[0]["change_percent"] is None
+    assert rows[0]["price"] == 200.0

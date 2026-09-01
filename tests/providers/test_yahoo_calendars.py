@@ -1,6 +1,6 @@
 """The calendar adapter, driven with the rows Yahoo really returns across its four surfaces.
 
-Value types are what these assert. Every row here carries the type `make shapes` prints, because
+Value types are what these assert. Every row here carries the type `make dump` prints, because
 the failure this adapter exists to absorb is a column whose name is right and whose values are
 not: the two sides of a split arrive as numbers, and a model expecting a ready-made ratio string
 rejects that surface's every row while the other three pass.
@@ -12,7 +12,7 @@ from typing import Final
 
 from orient.domain.models import Calendar, CalendarEntry
 from orient.providers._untyped import Records
-from orient.providers.yahoo.calendars import Fetch, YahooCalendars
+from orient.providers.yahoo.calendars import ALL_KINDS, Fetch, YahooCalendars
 
 START: Final = date(2026, 8, 10)
 END: Final = date(2026, 8, 17)
@@ -54,7 +54,7 @@ def _only(calendar: Calendar) -> CalendarEntry:
 
 async def test_a_split_ratio_is_rendered_from_the_two_numbers_it_arrives_as() -> None:
     """A reader reads neither 2.0-for-1.0 nor a row the adapter threw away for being numeric."""
-    entry: Final = _only(await _calendars(splits=(_split(),)).entries(START, END))
+    entry: Final = _only(await _calendars(splits=(_split(),)).entries(START, END, ALL_KINDS))
 
     assert entry.kind == "split"
     assert entry.detail == "2-for-1"
@@ -62,14 +62,16 @@ async def test_a_split_ratio_is_rendered_from_the_two_numbers_it_arrives_as() ->
 
 
 async def test_a_fractional_ratio_keeps_the_fraction() -> None:
-    entry: Final = _only(await _calendars(splits=(_split(share_worth=3.0, old_share_worth=2.5),)).entries(START, END))
+    entry: Final = _only(
+        await _calendars(splits=(_split(share_worth=3.0, old_share_worth=2.5),)).entries(START, END, ALL_KINDS)
+    )
 
     assert entry.detail == "3-for-2.5"
 
 
 async def test_a_split_missing_a_side_is_kept_without_a_ratio() -> None:
     """The event still belongs on the calendar; only the ratio is unknown."""
-    entry: Final = _only(await _calendars(splits=(_split(share_worth=None),)).entries(START, END))
+    entry: Final = _only(await _calendars(splits=(_split(share_worth=None),)).entries(START, END, ALL_KINDS))
 
     assert entry.detail is None
     assert entry.label == "Old Co"
@@ -81,7 +83,7 @@ async def test_the_four_surfaces_flatten_into_one_list_tagged_by_kind() -> None:
         economic=({"event": "CPI", "region": "US", "event_time": date(2026, 8, 12)},),
         ipo=({"symbol": "NEWCO", "company": "New Co", "exchange": "NMS", "event_date": date(2026, 8, 15)},),
         splits=(_split(),),
-    ).entries(START, END)
+    ).entries(START, END, ALL_KINDS)
 
     assert tuple(entry.kind for entry in calendar.entries) == ("economic", "earnings", "split", "ipo")
     assert calendar.unreadable == 0
@@ -94,7 +96,7 @@ async def test_entries_sort_by_date_with_the_undated_ones_last() -> None:
             {"symbol": "NODATE", "company": "Not Priced Yet", "exchange": "NMS", "event_date": None},
             {"symbol": "NEWCO", "company": "New Co", "exchange": "NMS", "event_date": date(2026, 8, 15)},
         ),
-    ).entries(START, END)
+    ).entries(START, END, ALL_KINDS)
 
     assert tuple(entry.symbol for entry in calendar.entries) == ("NEWCO", "NODATE")
 
@@ -125,7 +127,7 @@ async def test_a_row_yahoo_typed_unexpectedly_costs_itself_and_not_the_batch() -
             {"event": None, "region": 7, "event_time": "not a date"},
             {"event": "PPI", "region": "US", "event_time": date(2026, 8, 13)},
         ),
-    ).entries(START, END)
+    ).entries(START, END, ALL_KINDS)
 
     assert tuple(entry.label for entry in calendar.entries) == ("CPI", "PPI")
     assert calendar.unreadable == 1
@@ -149,13 +151,67 @@ async def test_the_window_asked_for_reaches_every_surface() -> None:
         windows.append((start, end))
         return ()
 
-    _ = await YahooCalendars(recording, recording, recording, recording).entries(START, END)
+    _ = await YahooCalendars(recording, recording, recording, recording).entries(START, END, ALL_KINDS)
 
     assert windows == [(START, END)] * 4
 
 
 async def test_an_empty_week_is_an_empty_calendar_rather_than_an_error() -> None:
-    calendar: Final = await _calendars().entries(START, END)
+    calendar: Final = await _calendars().entries(START, END, ALL_KINDS)
 
     assert calendar.entries == ()
     assert calendar.unreadable == 0
+
+
+async def test_only_earnings_is_asked_for_unless_a_caller_says_otherwise() -> None:
+    """Three of Yahoo's four surfaces cost more than they carry, so none of them is the default.
+
+    The economic one is the reason. It caps at twelve rows and draws them from the last day of the
+    window whatever its length, so a week containing a US inflation print comes back describing a
+    single later day in Bahrain and Kenya. A brief that quotes it is worse than one that does not.
+    """
+    asked: Final[list[str]] = []
+
+    def naming(kind: str) -> Fetch:
+        def fetch(start: date, end: date) -> Records:
+            del start, end
+            asked.append(kind)
+            return ()
+
+        return fetch
+
+    calendars: Final = YahooCalendars(naming("earnings"), naming("economic"), naming("ipo"), naming("split"))
+
+    _ = await calendars.entries(START, END)
+
+    assert asked == ["earnings"]
+
+
+async def test_a_listing_repeated_once_per_share_class_is_reported_once() -> None:
+    """Eight rows for one bond fund is eight of the twelve a surface will return, and a reader
+    shown the same name eight times concludes eight things are happening."""
+    rows: Final = tuple(
+        {"company": "Northern Funds", "symbol": ticker, "event_date": date(2026, 8, 12), "exchange": None}
+        for ticker in ("MUNF", "MUNG", "MUNH", "MUNJ")
+    )
+
+    calendar: Final = await _calendars(ipo=rows).entries(START, END, ("ipo",))
+
+    assert [entry.label for entry in calendar.entries] == ["Northern Funds"]
+
+
+async def test_an_earnings_row_keeps_the_estimate_and_the_size_it_arrived_with() -> None:
+    """ "Who reports this week" is a list of names until one of them is an index heavyweight."""
+    row: Final = {
+        "company": "NVIDIA Corporation",
+        "symbol": "NVDA",
+        "starts_at": date(2026, 8, 12),
+        "timing": "AMC",
+        "eps_estimate": 1.42,
+        "market_cap": 4.1e12,
+    }
+
+    entry: Final = _only(await _calendars(earnings=(row,)).entries(START, END))
+
+    assert entry.eps_estimate == 1.42
+    assert entry.market_cap == 4.1e12

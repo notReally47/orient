@@ -101,15 +101,17 @@ def _no_rows(start: date, end: date) -> Records:
 
 
 def _yahoo_mixed_calendar() -> YahooCalendars:
-    def ipos(start: date, end: date) -> Records:
+    """Rows on the surface a caller gets without asking, so the ordering is the ordering it sees."""
+
+    def earnings(start: date, end: date) -> Records:
         del start, end
         return (
-            {"symbol": UNDATED, "company": "Not Priced Yet", "exchange": "NMS", "event_date": None},
-            {"symbol": LATER, "company": "Later Co", "exchange": "NMS", "event_date": WINDOW_END},
-            {"symbol": SOONER, "company": "Sooner Co", "exchange": "NMS", "event_date": WINDOW_START},
+            {"symbol": UNDATED, "company": "Not Scheduled Yet", "timing": None, "starts_at": None},
+            {"symbol": LATER, "company": "Later Co", "timing": "AMC", "starts_at": WINDOW_END},
+            {"symbol": SOONER, "company": "Sooner Co", "timing": "BMO", "starts_at": WINDOW_START},
         )
 
-    return YahooCalendars(_no_rows, _no_rows, ipos, _no_rows)
+    return YahooCalendars(earnings, _no_rows, _no_rows, _no_rows)
 
 
 class _SilentSeries:

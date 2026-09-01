@@ -22,10 +22,13 @@ PACKAGE: Final = "orient.skills"
 SKILL_FILE: Final = "SKILL.md"
 REFERENCES: Final = "references"
 
-# From the Agent Skills specification. Vendored rather than imported: the reference library that
-# defines them says of itself that it is a demonstration artifact, not for production use.
 MAX_NAME: Final = 64
 MAX_DESCRIPTION: Final = 1024
+
+NEXT: Final = (
+    "Those instructions are in force from now on. Act on them in this turn: read whichever "
+    "bundled files they told you to read, and call the tools they said this instrument needs."
+)
 
 
 class SkillError(RuntimeError):
@@ -153,6 +156,11 @@ def as_activation(body: Body) -> str:
     announced by `<skill name="..."/>` read identically to the model and shrink like any other
     prose. The tier-1 catalog keeps the enclosing shape, because it rides in the system message
     and no compressor is allowed to touch that.
+
+    The last line is an instruction rather than the file list, because a tool result ending in a
+    bare enumeration reads as having nothing left to do: a run activating the second skill
+    answered that list with an empty turn, and the nudge it took to restart cost a turn of its
+    own. What a model reads last is what it acts on.
     """
     listing: Final = ("\n\n<skill_resources/>\n" + "\n".join(body.resources)) if body.resources else ""
-    return f'<skill name="{body.name}"/>\n\n{body.body}{listing}'
+    return f'<skill name="{body.name}"/>\n\n{body.body}{listing}\n\n{NEXT}'

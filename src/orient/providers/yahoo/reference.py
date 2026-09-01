@@ -12,10 +12,8 @@ from pydantic import TypeAdapter
 
 from orient.domain.market import (
     EarningsDetail,
-    EarningsEstimate,
     EarningsEvent,
     EpsRevisions,
-    EpsTrend,
     Holding,
     ImpliedMove,
     InstrumentProfile,
@@ -26,9 +24,7 @@ from orient.domain.models import AssetClass, Frozen
 from orient.providers._untyped import (
     Records,
     yahoo_earnings_dates,
-    yahoo_earnings_estimate,
     yahoo_eps_revisions,
-    yahoo_eps_trend,
     yahoo_fund_holdings,
     yahoo_fund_sector_weights,
     yahoo_info,
@@ -41,6 +37,19 @@ from orient.providers._untyped import (
 DAYS_IN_YEAR: Final = 365.0
 RECENT_ACTIONS: Final = 10
 FUND_CLASSES: Final = frozenset({"etf", "fund"})
+
+REPORTED_QUARTERS: Final = 8
+
+REITERATION: Final = "main"
+
+
+def _changed_its_mind(row: Mapping[str, object]) -> bool:
+    """An upgrade, a downgrade or a new initiation. Never a firm repeating itself."""
+    if row.get("action") == REITERATION:
+        return False
+    to_grade, from_grade = row.get("to_grade"), row.get("from_grade")
+    return not (to_grade and to_grade == from_grade)
+
 
 QUOTE_TYPES: Final[Mapping[str, AssetClass]] = MappingProxyType(
     {
@@ -57,8 +66,6 @@ QUOTE_TYPES: Final[Mapping[str, AssetClass]] = MappingProxyType(
 _PROFILE: Final = TypeAdapter(InstrumentProfile)
 _HOLDINGS: Final = TypeAdapter(tuple[Holding, ...])
 _EVENTS: Final = TypeAdapter(tuple[EarningsEvent, ...])
-_ESTIMATES: Final = TypeAdapter(tuple[EarningsEstimate, ...])
-_TREND: Final = TypeAdapter(tuple[EpsTrend, ...])
 _REVISIONS: Final = TypeAdapter(tuple[EpsRevisions, ...])
 _TARGETS: Final = TypeAdapter(PriceTargets)
 _ACTIONS: Final = TypeAdapter(tuple[RatingAction, ...])
@@ -93,11 +100,8 @@ def _profile_fields(symbol: str, info: Mapping[str, object]) -> Mapping[str, obj
         "trailing_pe": info.get("trailingPE"),
         "forward_pe": info.get("forwardPE"),
         "dividend_yield": info.get("dividendYield"),
-        "fifty_two_week_high": info.get("fiftyTwoWeekHigh"),
-        "fifty_two_week_low": info.get("fiftyTwoWeekLow"),
         "average_volume": info.get("averageVolume"),
         "shares_outstanding": info.get("sharesOutstanding"),
-        "description": info.get("longBusinessSummary"),
     }
 
 
@@ -165,15 +169,11 @@ class YahooEarnings:
     def __init__(
         self,
         events: Callable[[str], Records] = yahoo_earnings_dates,
-        estimates: Callable[[str], Records] = yahoo_earnings_estimate,
-        trend: Callable[[str], Records] = yahoo_eps_trend,
         revisions: Callable[[str], Records] = yahoo_eps_revisions,
         targets: Callable[[str], Mapping[str, object]] = yahoo_price_targets,
         actions: Callable[[str], Records] = yahoo_rating_actions,
     ) -> None:
         self._events: Final = events
-        self._estimates: Final = estimates
-        self._trend: Final = trend
         self._revisions: Final = revisions
         self._targets: Final = targets
         self._actions: Final = actions
@@ -182,13 +182,26 @@ class YahooEarnings:
         return await to_thread.run_sync(partial(self._detail, symbol, recent))
 
     def _detail(self, symbol: str, recent: int) -> EarningsDetail:
-        """Rating actions run to hundreds of rows going back years; only the newest ones inform a day."""
+        """Trimmed at both ends, because the long tail of both lists is history rather than news.
+
+        Yahoo returns every earnings event it holds, which for a long-listed company is twenty-five
+        quarters reaching back to 2020. What a beat this week means is set by the last two years of
+        them; the ones before that are half the answer's length and none of its meaning.
+
+        Rating actions run to hundreds of rows going back years, and most of them are firms
+        restating the grade they already had. A reiteration is not a change of mind, so only the
+        upgrades, downgrades and initiations survive.
+
+        Forward estimates and their revision history are not here. They describe the next quarter
+        and the one after, which is the wrong cadence for a single session: two live summaries were
+        handed sixty-four numbers of it between them and quoted none.
+        """
+        events: Final = _EVENTS.validate_python(self._events(symbol))
+        actions: Final = tuple(row for row in self._actions(symbol) if _changed_its_mind(row))
         return EarningsDetail(
             symbol=symbol,
-            events=_EVENTS.validate_python(self._events(symbol)),
-            estimates=_ESTIMATES.validate_python(self._estimates(symbol)),
-            trend=_TREND.validate_python(self._trend(symbol)),
+            events=events[:REPORTED_QUARTERS],
             revisions=_REVISIONS.validate_python(self._revisions(symbol)),
             price_targets=_TARGETS.validate_python(self._targets(symbol)),
-            recent_actions=_ACTIONS.validate_python(tuple(self._actions(symbol))[:recent]),
+            recent_actions=_ACTIONS.validate_python(actions[:recent]),
         )

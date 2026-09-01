@@ -5,16 +5,14 @@ providers wired to fake fetchers and drives `call_tool` through the same validat
 uses. `serve` is the only place that constructs real clients, and it owns their lifetime.
 """
 
-import argparse
 import sys
 from collections.abc import AsyncGenerator, Callable
-from contextlib import AsyncExitStack, asynccontextmanager
+from contextlib import AbstractAsyncContextManager, AsyncExitStack, asynccontextmanager
 from typing import Final, Literal
 
 import httpx
 from mcp.server import MCPServer
-from openai import AsyncOpenAI
-from pydantic import BaseModel, ConfigDict
+from pydantic import ConfigDict
 
 from orient.config import Settings
 from orient.llm.chat import ProxyChat
@@ -36,6 +34,7 @@ from orient.providers.yahoo import (
     YahooPrices,
     YahooReference,
 )
+from orient.serving import Listener, arguments, proxy_client
 from orient.skills.loader import Skills
 from orient.store.bars import BarRepository
 from orient.store.claims import ClaimRepository
@@ -47,20 +46,20 @@ from orient.store.summaries import SummaryRepository
 SERVER_NAME: Final = "market-summary"
 VERSION: Final = "0.1.0"
 DEFAULT_PORT: Final = 9000
-# The SDK binds loopback unless told otherwise, which is invisible until a container cannot be
-# reached from outside itself.
-DEFAULT_HOST: Final = "127.0.0.1"
 
 INSTRUCTIONS: Final = """\
 Market data and prior analysis for writing a grounded market summary.
 
-Every figure these tools return was measured, not inferred. A window too short to compute comes
-back null rather than approximated, so a null means unknown and must not be filled in.
+Every figure these tools return was measured, not inferred. A measurement the window was too
+short to compute is left out of the answer rather than approximated, so a field that is absent is
+one nothing measured. Absent is not zero, and it is not flat.
 
-Breadth and sector contribution are counted across the eleven sector ETFs, never across index
-constituents, because no constituent list is available. Say sector when describing them.
+Breadth and sector contribution are counted across the sector series of the instrument's own
+market, never across index constituents, because no constituent list is available. Say sector
+when describing them.
 """
 
+Lifespan = Callable[[MCPServer], AbstractAsyncContextManager[None]]
 Registrar = Callable[[MCPServer, ToolDeps], None]
 
 REGISTRARS: Final[tuple[Registrar, ...]] = (
@@ -74,28 +73,25 @@ REGISTRARS: Final[tuple[Registrar, ...]] = (
 )
 
 
-def create_server(deps: ToolDeps, name: str = SERVER_NAME) -> MCPServer:
-    server: Final = MCPServer(name=name, version=VERSION, instructions=INSTRUCTIONS)
+def create_server(deps: ToolDeps, name: str = SERVER_NAME, lifespan: Lifespan | None = None) -> MCPServer:
+    """The one place tools are registered, so a test and the real process build the same surface."""
+    server: Final = MCPServer(name=name, version=VERSION, instructions=INSTRUCTIONS, lifespan=lifespan)
     for register in REGISTRARS:
         register(server, deps)
     return server
 
 
-class Options(BaseModel):
-    """argparse hands back an untyped namespace, so it is validated rather than indexed."""
+class Options(Listener):
+    """Where to bind, and how a client reaches it."""
 
     model_config = ConfigDict(extra="ignore")
 
     transport: Literal["stdio", "streamable-http"] = "stdio"
-    host: str = DEFAULT_HOST
-    port: int = DEFAULT_PORT
 
 
 def parse(argv: list[str]) -> Options:
-    parser: Final = argparse.ArgumentParser(prog="market-summary-mcp")
+    parser: Final = arguments("market-summary-mcp", DEFAULT_PORT)
     _ = parser.add_argument("--transport", choices=("stdio", "streamable-http"), default="stdio")
-    _ = parser.add_argument("--host", default=DEFAULT_HOST)
-    _ = parser.add_argument("--port", type=int, default=DEFAULT_PORT)
     return Options.model_validate(vars(parser.parse_args(argv)))
 
 
@@ -106,11 +102,7 @@ def main(argv: list[str] | None = None) -> int:
     pool: Final = create_pool(settings.database_url)
     auth: Final = {"Authorization": f"Bearer {settings.proxy_api_key}"}
     proxy: Final = httpx.AsyncClient(base_url=settings.proxy_base_url, headers=auth, timeout=httpx.Timeout(60.0))
-    openai: Final = AsyncOpenAI(
-        base_url=f"{settings.proxy_base_url}/v1",
-        api_key=settings.proxy_api_key,
-        timeout=settings.request_timeout_seconds,
-    )
+    openai: Final = proxy_client(settings)
 
     @asynccontextmanager
     async def lifespan(server: MCPServer) -> AsyncGenerator[None, None]:
@@ -144,14 +136,7 @@ def main(argv: list[str] | None = None) -> int:
         claims=ClaimRepository(pool),
     )
 
-    server: Final = MCPServer(
-        name=SERVER_NAME,
-        version=VERSION,
-        instructions=INSTRUCTIONS,
-        lifespan=lifespan,
-    )
-    for register in REGISTRARS:
-        register(server, deps)
+    server: Final = create_server(deps, lifespan=lifespan)
 
     if args.transport == "stdio":
         server.run(transport="stdio")

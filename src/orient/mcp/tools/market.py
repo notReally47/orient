@@ -7,14 +7,12 @@ from mcp.server import MCPServer
 from pydantic import Field
 
 from orient.domain.market import MarketContext
-from orient.domain.models import Signals
-from orient.domain.signals import compute_signals
+from orient.domain.models import CONDITIONAL, Signals, commodities_bear_on
 from orient.mcp.deps import ToolDeps
+from orient.mcp.measure import gathered as _gathered
+from orient.mcp.measure import session_signals
 from orient.mcp.results import PriceHistory
 
-# A year of sessions needs more than a year of dates: 252 trading days fall inside roughly 370,
-# and the year-to-date figure is measured from the final close of the previous year.
-SIGNALS_LOOKBACK: Final = timedelta(days=400)
 MAX_BARS: Final = 400
 
 SESSION_DATE = Annotated[
@@ -49,28 +47,77 @@ def register(server: MCPServer, deps: ToolDeps) -> None:
         symbol: Annotated[str, Field(description="A ticker such as '^GSPC' or 'AAPL'")],
         session_date: SESSION_DATE,
     ) -> Signals:
-        """Returns, trend, volatility, volume and drawdown for one instrument, in one call.
+        """Everything one instrument's own price history says about its session, in one call.
 
-        Every window that the history is too short to support comes back null rather than
-        approximated, so a figure that is present is a figure that was actually computed.
-        `session_date` on the answer is the last session that actually traded on or before the
-        one asked for, which is not the same date when the market was shut.
+        Depends on nothing: issue it in the same turn as `get_instrument_profile`, not after it.
+
+        Returns over five windows, distance from the 50 and 200 day averages and the direction the
+        200 day average is itself moving, realised volatility, volume against its own average and
+        which side that volume was on, where the close sat in the day's range, how the move split
+        between the gap and the session, and the same day's move in this instrument's benchmark
+        and sector.
+
+        Read `relative` first: it decides whether there is anything to explain. An instrument that
+        moved with its sector has not done anything a news search can account for.
+
+        Anything the history was too short to support is left out rather than approximated, so a
+        figure that is present was computed and one that is absent was not measurable. Instruments
+        that price once a day have no gap or intraday move at all. `session_date` on the answer is
+        the last session that actually traded on or before the one asked for.
         """
-        bars = await deps.prices.bars(symbol, session_date - SIGNALS_LOOKBACK, session_date)
-        signals = compute_signals(symbol, bars)
-        if signals is None:
+        measured = await session_signals(deps, symbol, session_date)
+        if measured is None:
             message = f"no price history for {symbol} on or before {session_date}"
             raise ValueError(message)
-        return signals
+        return measured
 
     @server.tool()
-    async def get_market_context(session_date: SESSION_DATE) -> MarketContext:
-        """The backdrop a move happened against: session state, cross-asset levels and sectors.
+    async def get_market_context(
+        session_date: SESSION_DATE,
+        symbol: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "The instrument being summarised, which decides whose sectors come back. "
+                    "A Nifty summary gets the NSE's sectors and an S&P 500 summary the American "
+                    "ones. Omitted, the sectors are American, matching the rest of the backdrop."
+                )
+            ),
+        ] = None,
+    ) -> MarketContext:
+        """The backdrop a move happened against: cross-asset levels, macro and sector performance.
 
-        Breadth and contribution here are counted across a basket of sector funds, not across index
-        constituents, because no constituent list is available. Describe them as sector breadth.
-        `session` is null for a past date, because live status says nothing about a closed session.
+        Pass the symbol. The sectors are that instrument's own market's, named the way the market
+        names them: the NSE publishes FMCG and PSU Bank, neither a GICS category. Breadth and
+        contribution are counted across those sector series and never across index constituents,
+        because no constituent list exists, so describe them as sector breadth.
+
+        A sector carrying no move was not measured, which is not the same as one that finished
+        flat: neither prose nor panel may treat it as one. `sector_breadth` counts only what was
+        measured, so a total of zero means the board says nothing about this session. Contribution
+        needs published sector weights, which only some markets have.
+
+        `macro` holds what the agencies last published, each with the month it describes.
         """
-        return await deps.market.backdrop(session_date)
+        profile = None if symbol is None else await _gathered(deps.reference.profile(symbol))
+        context = await deps.market.backdrop(session_date, getattr(profile, "exchange", None))
+        return _bearing_on(context, getattr(profile, "asset_class", None), getattr(profile, "sector", None))
 
     _ = (get_price_history, compute_instrument_signals, get_market_context)
+
+
+def _bearing_on(context: MarketContext, asset_class: str | None, sector: str | None) -> MarketContext:
+    """The backdrop with the readings that have nothing to do with this instrument taken out.
+
+    The page already declined to draw the dollar and commodity block beside a memory chipmaker.
+    The writer went on quoting crude oil at one anyway, because the figure was still in the tool
+    result and a measurement in front of a model is an invitation to use it. Withholding it is the
+    only version of this rule that works: a summary cannot reach for a connection it was never
+    shown, and the grounding check would now refuse the sentence if it tried.
+
+    An instrument the commodities genuinely bear on — an energy producer, a currency pair, a
+    commodity future — keeps every reading it had.
+    """
+    if commodities_bear_on(asset_class, sector):
+        return context
+    return context.model_copy(update={"cross_asset": context.cross_asset.model_copy(update=dict.fromkeys(CONDITIONAL))})

@@ -12,6 +12,7 @@ import pytest
 
 from orient.skills.loader import (
     MAX_DESCRIPTION,
+    NEXT,
     SkillError,
     Skills,
     as_activation,
@@ -151,3 +152,12 @@ def test_the_packaged_tree_is_readable_and_every_skill_declares_itself() -> None
         assert listing.description
         assert listing.resources
         assert skills.body(listing.name).body
+
+
+def test_an_activation_ends_on_an_instruction_rather_than_a_file_list(tmp_path: Path) -> None:
+    """A tool result whose last line is a bare enumeration reads as having nothing left to do. A
+    run answered exactly that with an empty turn, and the nudge to restart cost a turn."""
+    rendered: Final = as_activation(Skills(_tree(tmp_path)).body("researching"))
+
+    assert not rendered.rstrip().endswith(".md")
+    assert rendered.rstrip().endswith(NEXT)

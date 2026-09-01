@@ -22,7 +22,7 @@ SIGNALS: Final[Mapping[str, object]] = {
     "returns": {"one_day": -0.008, "one_week": 0.0123, "one_month": None},
     "trend": {"from_50_day": 0.0341, "from_200_day": 0.1102},
     "realised_volatility_20d": 0.1184,
-    "volume_vs_20_day": 2.23,
+    "volume_multiple_20d": 2.23,
     "cross_asset": {"vix": 18.34, "yield_10y": 4.21, "yield_2y": 3.77},
 }
 
@@ -124,3 +124,15 @@ def test_a_thousands_separator_inside_a_figure_still_reads_as_one_number() -> No
     allowed: Final = measured([{"close": 7798.99, "volume": 1234}])
 
     assert isinstance(check("It closed at 7,798.99 on volume of 1,234.", allowed, date(2026, 8, 13)), Grounded)
+
+
+def test_a_window_named_in_a_field_may_be_written_out() -> None:
+    """`up_down_volume_60d` cannot be described without saying sixty, and a check that refuses it
+    sends the writer back to fix a sentence whose only fault is naming its own window."""
+    verdict: Final = check(
+        "Volume leaned to the buyers over the last 60 sessions.",
+        measured(({"up_down_volume_60d": 1.03},)),
+        SESSION,
+    )
+
+    assert isinstance(verdict, Grounded)

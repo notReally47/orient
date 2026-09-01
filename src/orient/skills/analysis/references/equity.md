@@ -1,25 +1,20 @@
----
-name: Equities
-description: What to establish about a single company's session before explaining it
----
+A single name moves for three reasons and `relative` separates them before you read anything else.
 
-A single name moves for three kinds of reason, and they are separable with what you have.
+`excess_over_benchmark` near zero: the market moved and it came along. `excess_over_peer` near
+zero: its sector moved, not the company, as with a bank on a day the curve steepened. Only when
+both excesses are large is something company-specific the explanation, and only then is a news
+search worth the round trip. Quote the excess, not the impression.
 
-The market moved, and it came along. Check the index and cross-asset block first. If breadth was
-broad and volatility rose, most names fell and this one is not the story.
+`get_earnings_detail` is worth a call when a report falls in the window ahead. Its `reactions` are
+how the shares moved the session after each of the last few results: a name sold on three of its
+last four prints is carrying something in, which no line item shows. Where a report is imminent,
+the revision trend matters more than the headline number, and a beat against estimates cut twice
+in a month is a different fact from a beat against rising ones. The implied move from the nearest
+expiry is the only options figure worth quoting, and it is an expectation.
 
-Its sector moved. Check the sector performance you already hold. A bank on a day the rate curve
-steepened, an energy name on a day crude jumped: the cause is in the cross-asset block, not in the
-company.
+Volume against its own average is the strongest single tell of conviction against drift. Quote it
+when it is far from one.
 
-Something happened to the company. Only after the two comparisons above fail does this become the
-explanation, and only then is a news search worth the round trip.
-
-Earnings deserve depth only when an event falls inside the window. When one does, the revision
-trend and the estimate spread say more than the headline number: a beat against estimates that
-were cut twice in a month is a different fact from a beat against rising estimates. The implied
-move from the nearest expiry is the one options figure worth quoting, and it says what the market
-expected, not what will happen.
-
-Volume against its own average is the strongest single tell of whether a move was conviction or
-drift. Quote it when it is far from one.
+The profile carries what the company is, not what it earns: sector, industry, size, beta, the two
+price-to-earnings ratios, dividend yield. There is no income statement, balance sheet or short
+interest here. Do not write about margins, leverage or crowded shorts.

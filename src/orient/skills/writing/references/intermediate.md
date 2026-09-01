@@ -1,8 +1,3 @@
----
-name: Intermediate level
-description: Mechanisms without definitions, with cross-asset confirmation, at 400 to 600 words
----
-
 Write for someone who follows markets and knows the vocabulary. They know what the VIX is. They
 want to know what it did relative to what the equity market did, and whether the two agreed.
 

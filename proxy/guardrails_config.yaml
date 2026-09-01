@@ -18,9 +18,14 @@ guardrails:
         - name: faithfulness
           weight: 40
           description: >-
-            Every figure and every causal claim is traceable to the market data supplied in the
-            prompt. Fails if a number contradicts the data, or if a cause is asserted with no
-            supporting figure.
+            Nothing is presented as more certain, or better sourced, than it is. A cause taken
+            from news is attributed to what reported it; a cause read off the measurements says
+            which. Fails if a figure contradicts the data supplied, if something reported is
+            written as though it were measured, or if a cause is asserted with no source of any
+            kind. It does not fail merely because a cause has no figure beside it: causes
+            frequently come from reporting, which carries no measurement, and every figure in the
+            prose has already been reconciled against the data deterministically before you see
+            it, so re-checking arithmetic is not your job.
         - name: compliance
           weight: 25
           description: >-
@@ -36,9 +41,12 @@ guardrails:
         - name: clarity_for_level
           weight: 15
           description: >-
-            Matches the requested reading level. For beginner, no jargon is used without its plain
-            meaning in the same sentence, and every figure is followed by what it means. For
-            advanced, no padding: prose is reserved for causality that needs explaining.
+            Matches the requested reading level. Every figure is followed by what it means for
+            this instrument on this day: whether it is large, and what follows from it. Defining
+            the term itself belongs in the glossary and its absence from the prose is correct, so
+            do not mark a summary down for using a term without explaining it. Do mark one down
+            for stating a figure and moving on without saying whether it matters. For advanced,
+            no padding: prose is reserved for causality that needs explaining.
 
   - guardrail_name: tool-budget
     litellm_params:

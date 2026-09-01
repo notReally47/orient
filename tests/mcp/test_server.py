@@ -56,6 +56,8 @@ EXPECTED_TOOLS: Final = frozenset(
         "search_news",
         "recall_history",
         "search_knowledge",
+        "find_similar_sessions",
+        "check_summary",
         "save_summary",
     }
 )
@@ -177,13 +179,30 @@ async def test_earnings_detail_omits_the_implied_move_until_a_price_is_given() -
     assert move.implied_volatility == pytest.approx(0.25)
 
 
-async def test_the_calendar_merges_all_four_sources_soonest_first() -> None:
+async def test_the_calendar_answers_with_earnings_and_nothing_else_by_default() -> None:
+    """Yahoo's other three surfaces cost more than they carry, so none of them is asked for.
+
+    The economic one is the reason: it caps at twelve rows drawn from the last day of the window
+    however long the window is, and has never returned a US release, so a week containing a CPI
+    print reads as an empty week. IPO and split rows are share-class listings and micro-cap
+    consolidations. The tool no longer offers them: an argument whose only working value is its
+    default is a trap, and the model reads that argument list before it reads any skill.
+    """
     async with tool_deps() as deps:
         result = await create_server(deps).call_tool("get_calendar", {"session_date": TODAY, "days": 7})
 
-    kinds = [entry.kind for entry in parsed(result, Calendar).entries]
-    assert set(kinds) == {"earnings", "economic", "ipo", "split"}
-    assert kinds[-1] == "ipo"
+    kinds = {entry.kind for entry in parsed(result, Calendar).entries}
+    assert kinds == {"earnings"}
+
+
+async def test_the_calendar_offers_no_way_to_reach_the_surfaces_that_were_dropped() -> None:
+    """The provider still takes `kinds`, because the tool is not the only caller. What must not
+    exist is a tool argument the model can set to reach a surface known to answer badly."""
+    async with tool_deps() as deps:
+        tools = await create_server(deps).list_tools()
+
+    calendar = next(tool for tool in tools if tool.name == "get_calendar")
+    assert "kinds" not in _Schema.model_validate(calendar.input_schema).properties
 
 
 async def test_news_search_answers_every_question_in_one_call() -> None:
@@ -207,8 +226,9 @@ async def test_an_article_keeps_the_date_the_search_tool_gave_it() -> None:
     assert parsed(result, NewsFindings).sources[0].published == "2026-08-13T00:00:00.000Z"
 
 
-async def test_knowledge_search_strips_storage_identifiers() -> None:
-    """A model has no use for a summary_id and should never be handed one to echo back."""
+async def test_knowledge_search_hands_back_the_claim_id_and_nothing_else_internal() -> None:
+    """The claim id is the handle for settling an expectation, so it has to come back. The row it
+    hangs off is storage detail a model has no use for."""
     async with tool_deps() as deps:
         result = await create_server(deps).call_tool("search_knowledge", {"query": "narrow breadth"})
 

@@ -1,4 +1,4 @@
-"""The SQL itself, against the live Postgres from `make up`.
+"""The SQL itself, against the live Postgres from `make start`.
 
 A fake pool can check the parameters a repository builds but not whether the statement is
 valid, whether a projection matches the table, or whether an HNSW search over `vector`
@@ -17,6 +17,7 @@ from psycopg import AsyncConnection
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from orient.domain.models import (
+    SIGNALS_VERSION,
     Bar,
     Claim,
     Instrument,
@@ -58,8 +59,6 @@ PREFLIGHT_TIMEOUT: Final = 10
 
 @pytest.fixture
 async def pool() -> AsyncIterator[Pool]:
-    # Connect directly first. The pool retries on failure and reports a wrong DSN or a
-    # stopped stack as an opaque timeout half a minute later; this surfaces the real error.
     async with await AsyncConnection.connect(DSN, connect_timeout=PREFLIGHT_TIMEOUT):
         pass
 
@@ -83,7 +82,6 @@ async def symbol(pool: Pool) -> AsyncIterator[str]:
         yield generated
     finally:
         async with pool.connection() as connection:
-            # instruments cascades to sessions, summaries and their claims; bars stand alone.
             _ = await connection.execute("DELETE FROM bars WHERE symbol = %s", (generated,))
             _ = await connection.execute("DELETE FROM instruments WHERE symbol = %s", (generated,))
             _ = await connection.execute("DELETE FROM summaries WHERE symbol = %s", (generated,))
@@ -164,7 +162,7 @@ async def test_sessions_come_back_newest_first(pool: Pool, symbol: str) -> None:
     for day in (10, 11, 12):
         await repository.upsert(_signals(symbol, date(2026, 8, day)))
 
-    recalled: Final = await repository.recent(symbol, "1")
+    recalled: Final = await repository.recent(symbol, SIGNALS_VERSION)
 
     assert [entry.session_date.day for entry in recalled] == [12, 11, 10]
 
@@ -174,7 +172,7 @@ async def test_a_signals_snapshot_survives_jsonb(pool: Pool, symbol: str) -> Non
     signals: Final = _signals(symbol, date(2026, 8, 12))
     await SessionRepository(pool).upsert(signals)
 
-    assert (await SessionRepository(pool).recent(symbol, "1"))[0] == signals
+    assert (await SessionRepository(pool).recent(symbol, signals.version))[0] == signals
 
 
 async def test_a_summary_is_found_by_its_whole_key(pool: Pool, symbol: str) -> None:

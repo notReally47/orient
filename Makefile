@@ -7,7 +7,7 @@ COMPOSE ?= $(DOCKER) compose
 PKG     := orient
 RUN     := uv run --package $(PKG)
 
-.PHONY: help bootstrap image start stop reset rebuild status logs ui jaegar migrate probe dump test test-integration test-run lint format typecheck check clean
+.PHONY: help bootstrap image start reload-proxy stop reset rebuild status logs ui gui jaeger migrate probe dump test test-integration test-run lint format typecheck check clean
 
 help:
 	@grep -E '^[a-z-]+:.*?## .*$$' $(MAKEFILE_LIST) | awk 'BEGIN {FS = ":.*?## "}; {printf "  %-12s %s\n", $$1, $$2}'
@@ -19,8 +19,13 @@ bootstrap: ## Sync the shared workspace venv with orient's dev and gui extras
 image: ## Build the app image from the working tree. Cached, so a no-op when src/ is unchanged.
 	$(COMPOSE) build
 
-start: image migrate ## Build, start the container stack and check the containers are ready
+start: image migrate reload-proxy ## Build, start the container stack and check the containers are ready
 	@echo "stack started. run 'make probe' next."
+
+# The proxy reads its config from a bind mount, so editing the yaml changes nothing compose can
+# see: same image, same service definition, so the container keeps the config it parsed at boot.
+reload-proxy: ## Recreate the proxy so a changed proxy/*.yaml is actually picked up
+	$(COMPOSE) up -d --force-recreate litellm
 
 stop: ## Stop the stack, keeping the database volume
 	$(COMPOSE) down
@@ -48,7 +53,10 @@ logs: ## Follow proxy logs
 ui: ## Open the LiteLLM admin UI in your default browser
 	powershell.exe -Command "Start-Process 'http://localhost:4000/ui'"
 
-jaegar:
+gui: ## Open the app in your default browser
+	powershell.exe -Command "Start-Process 'http://localhost:8501'"
+
+jaeger: ## Open the Jaeger trace UI in your default browser
 	powershell.exe -Command "Start-Process 'http://localhost:16686'"
 
 migrate: ## Start the stack if needed, then apply db/migrations/*.sql in order. Safe to re-run.
@@ -66,7 +74,7 @@ migrate: ## Start the stack if needed, then apply db/migrations/*.sql in order. 
 	@for i in $$(seq 1 60); do \
 		curl -sf http://localhost:9000/mcp >/dev/null 2>&1 && break || sleep 2; \
 	done
-	$(COMPOSE) up -d litellm orchestrator
+	$(COMPOSE) up -d litellm orchestrator gui
 	@echo "waiting for litellm to be ready..."
 	@for i in $$(seq 1 60); do \
 		curl -sf http://localhost:4000/health/liveliness >/dev/null 2>&1 && break || sleep 2; \
@@ -84,7 +92,7 @@ test: ## Run the offline test suite
 test-integration: ## Run the store tests against the live Postgres from `make start`
 	$(RUN) pytest -m integration --no-cov
 
-test-run:
+test-run: ## Post one run to a running orchestrator, bypassing the GUI
 	curl.exe -N -X POST http://localhost:8000/runs -H 'content-type: application/json' -d '{"symbol":"^GSPC","session_date":"2026-08-13","level":"beginner"}'
 
 lint: ## Read-only lint and format check, identical to CI
@@ -100,6 +108,6 @@ typecheck: ## Static type check
 
 check: lint typecheck test ## Everything CI runs
 
-clean:
+clean: ## Remove local caches and coverage output. Leaves the stack and the database alone.
 	rm -rf .pytest_cache .ruff_cache .coverage htmlcov
 	find . -name __pycache__ -type d -prune -exec rm -rf {} +
